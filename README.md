@@ -84,11 +84,11 @@ Full details: [Security](docs/security.md) · [Hardening audit trail](docs/SECUR
 
 ```bash
 git clone <your-repo-url> h-cli && cd h-cli
-bash setup.sh                                      # interactive: ENV_TAG, tokens, OAuth, then builds
+bash setup.sh                                      # interactive: ENV_TAG, tokens, then builds
 nano context.md                                    # describe what YOUR deployment is for
 ssh-copy-id -i ssh-keys/id_ed25519.pub user@host   # add the generated key to your servers
-docker compose run -it claude-code setup-token     # one-time: authenticate Claude Code
 docker compose up -d
+docker exec -it h-cli-claude claude                # one-time: interactive login, exit when done
 ```
 
 ## Usage
