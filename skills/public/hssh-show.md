@@ -14,24 +14,30 @@ h-ssh runs show commands on network devices in parallel via SSH, telnet, or REST
 
 | Transport | Vendor string | Target format | Use case |
 |-----------|--------------|---------------|----------|
-| SSH | `junos`, `arista`, `generic` | `name:host:vendor` | Production routers/switches with SSH |
+| SSH | `junos`, `arista`, `generic` | `name:host[:port]:vendor` | Production routers/switches with SSH |
 | Telnet | `telnet-ios`, `telnet-junos`, `telnet-arista`, `telnet-nxos`, `telnet` | `name:host:port:vendor` | Console ports (EVE-NG), legacy devices |
 | REST | `rest` | `name:https://host.example.com:rest` | APIs (NetBox, controllers, etc.) |
 
 ## Quick Reference — SSH
 
 ```bash
-# Single device
+# Single device (uses ~/.ssh/config for user, port, key)
+h-ssh.py -sC "show bgp summary" --target CR1:10.0.1.1:junos --json -y
+
+# Explicit user override
 h-ssh.py --user hcli -sC "show bgp summary" --target CR1:10.0.1.1:junos --json -y
 
 # Multiple devices (parallel)
-h-ssh.py --user hcli -sC "show interfaces terse" \
+h-ssh.py -sC "show interfaces terse" \
   --target CR1:10.0.1.1:junos \
   --target CR2:10.0.1.2:junos \
   --json -y
 
+# Custom SSH port via target
+h-ssh.py -sC "show version" --target SRV1:h-srv:8023:generic --json -y
+
 # Command shortcuts (bgp, ospf, interfaces, routes, lldp)
-h-ssh.py --user hcli -sC bgp --target CR1:10.0.1.1 --json -y
+h-ssh.py -sC bgp --target CR1:10.0.1.1 --json -y
 ```
 
 ## Quick Reference — Telnet
@@ -59,7 +65,7 @@ echo '[
   {"target": "netbox:https://netbox.example.com:rest",
    "show": "/api/dcim/devices/",
    "auth": {"scheme": "bearer", "token": "YOUR_API_TOKEN"}}
-]' | h-ssh.py --user hcli --job - --json --quiet
+]' | h-ssh.py --job - --json --quiet
 ```
 
 REST `show()` = GET request to the API path. Pagination via `next` field is handled automatically.
@@ -77,7 +83,7 @@ echo '[
    "show": "/api/dcim/devices/",
    "auth": {"scheme": "bearer", "token": "YOUR_API_TOKEN"}},
   {"target": "SW1:192.168.1.100:5000:telnet-ios", "show": "show ip route"}
-]' | h-ssh.py --user hcli --job - --json --quiet
+]' | h-ssh.py --job - --json --quiet
 ```
 
 ## Output
@@ -93,7 +99,8 @@ With `--json`, returns a JSON array:
 ## Rules
 - Always use `--json` for machine-parseable output
 - Always use `-y` to prevent hanging on prompts
-- SSH `--target` format: `name:host:vendor` (vendor defaults to `junos`)
+- `--user` is optional — falls back to `~/.ssh/config` (User, Port, IdentityFile), then system user
+- SSH `--target` format: `name:host[:port]:vendor` (vendor defaults to `junos`)
 - Telnet `--target` format: `name:host:port:vendor` (port is required)
 - REST auth requires `--job` with `"auth"` field — cannot use `--target` alone
 - Parse JSON output to summarize results for the user

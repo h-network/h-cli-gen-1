@@ -13,22 +13,22 @@ Use h-ssh to run diagnostic commands across multiple devices in parallel — via
 
 **Connectivity check:**
 ```bash
-h-ssh.py --user hcli -sC "show interfaces terse" --target R1:10.0.1.1 --json -y
+h-ssh.py -sC "show interfaces terse" --target R1:10.0.1.1 --json -y
 ```
 
 **BGP neighbor state:**
 ```bash
-h-ssh.py --user hcli -sC bgp --target R1:10.0.1.1 --target R2:10.0.1.2 --json -y
+h-ssh.py -sC bgp --target R1:10.0.1.1 --target R2:10.0.1.2 --json -y
 ```
 
 **OSPF adjacency check:**
 ```bash
-h-ssh.py --user hcli -sC ospf --target R1:10.0.1.1 --target R2:10.0.1.2 --json -y
+h-ssh.py -sC ospf --target R1:10.0.1.1 --target R2:10.0.1.2 --json -y
 ```
 
 **Route table summary:**
 ```bash
-h-ssh.py --user hcli -sC routes --target R1:10.0.1.1 --json -y
+h-ssh.py -sC routes --target R1:10.0.1.1 --json -y
 ```
 
 ## Common Patterns — Telnet (EVE-NG / Console)
@@ -55,7 +55,7 @@ echo '[
   {"target": "netbox:https://netbox.example.com:rest",
    "show": "/api/dcim/devices/?status=active",
    "auth": {"scheme": "bearer", "token": "YOUR_API_TOKEN"}}
-]' | h-ssh.py --user hcli --job - --json --quiet
+]' | h-ssh.py --job - --json --quiet
 ```
 
 ## Mixed Diagnostics — All Transports
@@ -69,7 +69,7 @@ echo '[
   {"target": "netbox:https://netbox.example.com:rest",
    "show": "/api/dcim/devices/?status=failed",
    "auth": {"scheme": "bearer", "token": "YOUR_API_TOKEN"}}
-]' | h-ssh.py --user hcli --job - --json --quiet
+]' | h-ssh.py --job - --json --quiet
 ```
 
 ## Iterative Workflow
@@ -79,3 +79,8 @@ echo '[
 4. Report — summarize findings with device names, states, and suggested action
 
 For interactive debugging (step-by-step CLI exploration), use tmux panes instead of h-ssh.
+
+## Notes
+- `--user` is optional — h-ssh respects `~/.ssh/config` (User, Port, IdentityFile)
+- Use `--user` only when you need to override the SSH config
+- SSH targets support custom ports: `name:host:port:vendor`

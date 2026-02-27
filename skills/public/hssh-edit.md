@@ -14,7 +14,7 @@ h-ssh can push configuration changes to network devices via SSH, telnet, or REST
 
 **Step 1 — Dry run (ALWAYS do this first):**
 ```bash
-h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
+h-ssh.py --json -eB "set system ntp server 10.0.0.1" \
   --target CR1:10.0.1.1:junos --commit-confirmed 10 --dry-run -y
 ```
 
@@ -22,7 +22,7 @@ h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
 
 **Step 3 — Commit (only after user says yes):**
 ```bash
-h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
+h-ssh.py --json -eB "set system ntp server 10.0.0.1" \
   --target CR1:10.0.1.1:junos --commit-confirmed 10 -y \
   --audit-log /var/log/hcli/hssh/audit.log
 ```
@@ -60,7 +60,7 @@ echo '[
   {"target": "netbox:https://netbox.example.com:rest",
    "edit": "{\"method\": \"PATCH\", \"path\": \"/api/dcim/devices/1/\", \"body\": {\"name\": \"R1-NEW\"}}",
    "auth": {"scheme": "bearer", "token": "YOUR_API_TOKEN"}}
-]' | h-ssh.py --user hcli --job - --json --quiet --dry-run
+]' | h-ssh.py --job - --json --quiet --dry-run
 ```
 
 - **Dry run:** GETs current state, diffs against proposed body (field-level diff)
@@ -72,5 +72,6 @@ echo '[
 - **ALWAYS** include `--commit-confirmed N` for SSH and telnet-junos (auto-rollback in N minutes)
 - **ALWAYS** show the diff to the user and get confirmation before committing
 - **ALWAYS** use `-y` and `--json`
+- `--user` is optional — falls back to SSH config, then system user
 - REST edit requires `--job` with `"auth"` field — same as REST show
 - After commit, remind the user about the rollback timer
