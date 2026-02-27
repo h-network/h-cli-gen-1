@@ -10,7 +10,7 @@ Send a message. Get it done.
 
 ## What it is
 
-A Telegram bot backed by Claude Code, Ollama, or vLLM. You type plain English, it executes commands in a hardened container and returns results. Session context persists for 4 hours — it remembers "that host" and "same scan again." Context is injected as plain text, not JSONL replay — [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) for the same conversation.
+A Telegram bot backed by Claude Code, Ollama, or vLLM. You type plain English, it executes commands in a hardened container and returns results. Session context persists for 24 hours — it remembers "that host" and "same scan again." Context is injected as plain text, not JSONL replay — [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) for the same conversation.
 
 ```
 "scan 192.168.1.1"              →  nmap results in 10 seconds
