@@ -37,8 +37,8 @@ class RestTransport(BaseTransport):
         self._client: httpx.Client | None = None
         self._base_url: str = ""
 
-    def connect(self, host: str, user: str, password: str | None = None,
-                timeout: int = 30) -> None:
+    def connect(self, host: str, user: str | None = None, password: str | None = None,
+                timeout: int = 30, port: int | None = None) -> None:
         self._base_url = host.rstrip("/")
         headers = {}
         if password:

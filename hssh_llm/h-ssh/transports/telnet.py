@@ -45,11 +45,12 @@ class TelnetTransport(BaseTransport):
         self._prompt_re: re.Pattern = PROMPT_PATTERNS["ios"]
         self._buffer: str = ""
 
-    def connect(self, host: str, user: str, password: str | None = None,
-                timeout: int = 30) -> None:
-        # host format for telnet: "ip:port" or just "ip" (default port 23)
-        # The port is extracted in the job parser and stored in device.host as "ip:port"
-        if ":" in host:
+    def connect(self, host: str, user: str | None = None, password: str | None = None,
+                timeout: int = 30, port: int | None = None) -> None:
+        # Port: explicit param > parsed from host string > default 23
+        if port:
+            ip = host
+        elif ":" in host:
             parts = host.rsplit(":", 1)
             ip = parts[0]
             port = int(parts[1])

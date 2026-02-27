@@ -9,7 +9,7 @@ h-ssh can push configuration changes to network devices. This is a destructive o
 
 **Step 1 — Dry run (ALWAYS do this first):**
 ```bash
-h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
+h-ssh.py --json -eB "set system ntp server 10.0.0.1" \
   --target CR1:10.0.1.1:junos --commit-confirmed 10 --dry-run -y
 ```
 
@@ -17,7 +17,7 @@ h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
 
 **Step 3 — Commit (only after user says yes):**
 ```bash
-h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
+h-ssh.py --json -eB "set system ntp server 10.0.0.1" \
   --target CR1:10.0.1.1:junos --commit-confirmed 10 -y \
   --audit-log /var/log/hcli/hssh/audit.log
 ```
@@ -32,4 +32,5 @@ h-ssh.py --user hcli --json -eB "set system ntp server 10.0.0.1" \
 - **ALWAYS** include `--commit-confirmed N` (auto-rollback in N minutes)
 - **ALWAYS** show the diff to the user and get confirmation before committing
 - **ALWAYS** use `-y` and `--json`
+- `--user` is optional — falls back to SSH config, then system user
 - After commit, remind the user about the rollback timer

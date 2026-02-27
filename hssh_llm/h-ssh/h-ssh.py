@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     target_group.add_argument("--job", metavar="FILE", help="JSON job file with per-device commands (use - for stdin)")
 
     # Authentication
-    p.add_argument("--user", default=os.environ.get("HSSH_USER", os.environ.get("USER", "hcli")), help="SSH username")
+    p.add_argument("--user", default=os.environ.get("HSSH_USER"), help="SSH username (default: from SSH config or system user)")
     p.add_argument("--password", default=None, help="SSH/eAPI password (or use HSSH_PASSWORD env)")
 
     # Show mode

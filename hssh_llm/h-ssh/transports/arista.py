@@ -4,7 +4,8 @@ from .base import BaseTransport, EditResult
 class AristaTransport(BaseTransport):
     """Arista eAPI transport — stub. Requires pyeapi (not installed in dev)."""
 
-    def connect(self, host: str, user: str, password: str | None = None, timeout: int = 30) -> None:
+    def connect(self, host: str, user: str | None = None, password: str | None = None,
+                timeout: int = 30, port: int | None = None) -> None:
         raise NotImplementedError("Arista eAPI transport requires pyeapi. Install with: pip install pyeapi")
 
     def show(self, command: str, timeout: int = 120) -> str:

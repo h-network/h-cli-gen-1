@@ -45,7 +45,7 @@ TRANSPORT_MAP: dict[str, type[BaseTransport]] = {
 }
 
 
-def _run_device(device: Device, user: str, password: str | None, command: str,
+def _run_device(device: Device, user: str | None, password: str | None, command: str,
                 mode: str, session_timeout: int, command_timeout: int,
                 edit_payload: str | None = None, dry_run: bool = False,
                 confirmed_minutes: int = 0,
@@ -64,11 +64,8 @@ def _run_device(device: Device, user: str, password: str | None, command: str,
         if hasattr(transport, 'set_vendor'):
             actual_vendor = device.vendor.replace("telnet-", "") if device.vendor.startswith("telnet-") else "ios"
             transport.set_vendor(actual_vendor)
-        # If device has a port, include it in the host
-        connect_host = device.host
-        if device.port:
-            connect_host = f"{device.host}:{device.port}"
-        transport.connect(connect_host, dev_user, dev_password, timeout=session_timeout)
+        transport.connect(device.host, dev_user, dev_password,
+                          timeout=session_timeout, port=device.port)
         if mode == "show":
             output = transport.show(command, timeout=command_timeout)
             elapsed = int((time.monotonic() - start) * 1000)
@@ -102,7 +99,7 @@ def _run_device(device: Device, user: str, password: str | None, command: str,
         transport.close()
 
 
-def run_parallel(devices: list[Device], user: str, password: str | None,
+def run_parallel(devices: list[Device], user: str | None, password: str | None,
                  command: str, mode: str, workers: int = 8,
                  session_timeout: int = 30, command_timeout: int = 120,
                  edit_payloads: dict[str, str] | None = None,

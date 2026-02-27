@@ -6,7 +6,7 @@ from jnpr.junos.exception import (
     ConnectError, LockError, UnlockError,
     ConfigLoadError, CommitError, RpcTimeoutError,
 )
-from .base import BaseTransport, EditResult
+from .base import BaseTransport, EditResult, load_ssh_config
 
 
 class JunosTransport(BaseTransport):
@@ -19,26 +19,48 @@ class JunosTransport(BaseTransport):
     def __init__(self):
         self._ssh: paramiko.SSHClient | None = None
         self._host: str = ""
-        self._user: str = ""
+        self._user: str | None = None
         self._password: str | None = None
+        self._port: int | None = None
         self._timeout: int = 30
+        self._ssh_cfg: dict = {}
 
     # ── connection ──────────────────────────────────────────────
 
-    def connect(self, host: str, user: str, password: str | None = None, timeout: int = 30) -> None:
+    def connect(self, host: str, user: str | None = None, password: str | None = None,
+                timeout: int = 30, port: int | None = None) -> None:
         self._host = host
-        self._user = user
         self._password = password
         self._timeout = timeout
+
+        # Load SSH config for this host
+        self._ssh_cfg = load_ssh_config(host)
+
+        # Resolve effective user and port
+        self._user = user or self._ssh_cfg.get("user")
+        self._port = port or (int(self._ssh_cfg["port"]) if "port" in self._ssh_cfg else None)
 
         # Paramiko SSH — used for show commands
         self._ssh = paramiko.SSHClient()
         self._ssh.load_system_host_keys()
         self._ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
-        kwargs = {"hostname": host, "username": user, "timeout": timeout,
-                  "allow_agent": True, "look_for_keys": True}
+
+        kwargs = {
+            "hostname": self._ssh_cfg.get("hostname", host),
+            "timeout": timeout,
+            "allow_agent": True,
+            "look_for_keys": True,
+        }
+
+        if self._port:
+            kwargs["port"] = self._port
+        if self._user:
+            kwargs["username"] = self._user
+        if not password and "identityfile" in self._ssh_cfg:
+            kwargs["key_filename"] = self._ssh_cfg["identityfile"]
         if password:
             kwargs["password"] = password
+
         self._ssh.connect(**kwargs)
 
     # ── show path (paramiko SSH) ────────────────────────────────
@@ -61,18 +83,29 @@ class JunosTransport(BaseTransport):
     # ── config path (PyEZ NETCONF) ──────────────────────────────
 
     def _pyez_device(self) -> JunosDevice:
-        """Create a PyEZ device connection over SSH port 22."""
+        """Create a PyEZ device connection, respecting SSH config and explicit overrides."""
         kwargs = {
-            "host": self._host,
-            "user": self._user,
-            "port": 22,
+            "host": self._ssh_cfg.get("hostname", self._host),
+            "port": self._port or 22,
             "gather_facts": False,
             "timeout": self._timeout,
         }
+
+        if self._user:
+            kwargs["user"] = self._user
+
         if self._password:
             kwargs["passwd"] = self._password
+        elif "identityfile" in self._ssh_cfg:
+            # Use first identity file from SSH config
+            key_files = self._ssh_cfg["identityfile"]
+            if isinstance(key_files, list) and key_files:
+                kwargs["ssh_private_key_file"] = key_files[0]
+            elif isinstance(key_files, str):
+                kwargs["ssh_private_key_file"] = key_files
         else:
             kwargs["ssh_private_key_file"] = None  # use agent/default keys
+
         dev = JunosDevice(**kwargs)
         dev.open()
         return dev
