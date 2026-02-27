@@ -16,11 +16,15 @@ from hcli_logging import get_logger
 logger = get_logger(__name__, service="memory")
 
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "h-cli-qdrant")
-QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+try:
+    QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+except (ValueError, TypeError):
+    logger.warning("Invalid QDRANT_PORT, falling back to 6333")
+    QDRANT_PORT = 6333
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 
-COLLECTION = "hcli_memory"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+COLLECTION = os.environ.get("QDRANT_COLLECTION", "hcli_memory")
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
 mcp = FastMCP("h-cli-memory", host="0.0.0.0", port=8084)
@@ -37,22 +41,30 @@ def _init():
     if not QDRANT_API_KEY:
         raise RuntimeError("QDRANT_API_KEY not set")
 
-    _qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
-    logger.info("Connected to Qdrant at %s:%d", QDRANT_HOST, QDRANT_PORT)
+    try:
+        _qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY, https=False, check_compatibility=False)
+        logger.info("Connected to Qdrant at %s:%d", QDRANT_HOST, QDRANT_PORT)
 
-    # Ensure collection exists
-    collections = [c.name for c in _qdrant.get_collections().collections]
-    if COLLECTION not in collections:
-        _qdrant.create_collection(
-            collection_name=COLLECTION,
-            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
-        )
-        logger.info("Created collection '%s'", COLLECTION)
-    else:
-        logger.info("Collection '%s' already exists", COLLECTION)
+        # Ensure collection exists
+        collections = [c.name for c in _qdrant.get_collections().collections]
+        if COLLECTION not in collections:
+            _qdrant.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+            )
+            logger.info("Created collection '%s'", COLLECTION)
+        else:
+            logger.info("Collection '%s' already exists", COLLECTION)
 
-    _embedder = TextEmbedding(model_name=EMBEDDING_MODEL)
-    logger.info("Embedding model '%s' loaded", EMBEDDING_MODEL)
+        _embedder = TextEmbedding(model_name=EMBEDDING_MODEL)
+        logger.info("Embedding model '%s' loaded", EMBEDDING_MODEL)
+    except Exception:
+        logger.exception("_init() failed, cleaning up")
+        if _qdrant is not None:
+            _qdrant.close()
+        _qdrant = None
+        _embedder = None
+        raise
 
 
 @mcp.tool()
@@ -74,17 +86,17 @@ def memory_search(query: str, limit: int = 5) -> str:
     try:
         embedding = list(_embedder.embed([query]))[0].tolist()
 
-        results = _qdrant.search(
+        response = _qdrant.query_points(
             collection_name=COLLECTION,
-            query_vector=embedding,
+            query=embedding,
             limit=limit,
         )
 
-        if not results:
+        if not response.points:
             return "No relevant memories found."
 
         entries = []
-        for i, hit in enumerate(results, 1):
+        for i, hit in enumerate(response.points, 1):
             payload = hit.payload or {}
             score = f"{hit.score:.3f}"
             question = payload.get("question", "")
@@ -104,11 +116,14 @@ def memory_search(query: str, limit: int = 5) -> str:
 
     except Exception as e:
         logger.exception("memory_search failed")
-        return f"Error searching memory: {e}"
+        return "Error: memory search unavailable"
 
 
 if __name__ == "__main__":
     logger.info("Initializing memory server...")
-    _init()
+    try:
+        _init()
+    except Exception:
+        logger.warning("Memory init failed — server will start but memory_search will return 'not initialized'")
     logger.info("Starting memory MCP server on 0.0.0.0:8084")
     mcp.run(transport="sse")
