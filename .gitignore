@@ -26,3 +26,7 @@ backups/
 # Agent data (notes, learned knowledge)
 data/*
 !data/.gitkeep
+
+# Private skills (deployment-specific, not shared)
+skills/private/*
+\!skills/private/.gitkeep
