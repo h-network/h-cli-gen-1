@@ -86,24 +86,24 @@ The TCP/IP part: lower layers cannot be overridden by higher layers — just as 
 
 An independent model (Haiku) enforces these rules on every command — stateless, with zero conversation context. It can't be persuaded because it has no memory of the conversation. [Testing proved](docs/test-cases/gate-vs-prompt-enforcement.md) that a single LLM will not self-enforce its own safety rules. You need two models: one to think, one to judge.
 
-**44 hardening items.** Four containers, two isolated Docker networks.
+**44 hardening items.** Nine services, two isolated Docker networks.
 
 - **Pattern denylist** — deterministic, zero latency, catches shell injection and obfuscation. The tripwire.
 - **Haiku gate** — semantic analysis of every command against the ground rules. The wall.
-- **Network isolation** — frontend and backend on separate Docker networks; only the dispatcher bridges both
+- **Network isolation** — frontend and backend on separate Docker networks; Redis bridges both as the message bus, claude-code spans both for Redis + MCP access
 - **Non-root, least privilege** — all containers run as uid 1000, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs on telegram-bot
 - **HMAC-signed results** — prevents Redis result spoofing between containers
 
-Full details: [Security](docs/security.md) · [Hardening audit trail](SECURITY-HARDENING.md)
+Full details: [Security](docs/security.md) · [Hardening audit trail](docs/SECURITY-HARDENING.md)
 
 ## Quick Start
 
 ```bash
-./install.sh                                       # creates .env + context.md, generates SSH keypair, builds
-nano .env                                          # set TELEGRAM_BOT_TOKEN, ALLOWED_CHATS
+git clone <your-repo-url> h-cli && cd h-cli
+bash setup.sh                                      # interactive: ENV_TAG, tokens, OAuth, then builds
 nano context.md                                    # describe what YOUR deployment is for
 ssh-copy-id -i ssh-keys/id_ed25519.pub user@host   # add the generated key to your servers
-docker compose run -it --entrypoint bash claude-code  # one-time: shell in, run 'claude' to login
+docker compose run -it claude-code setup-token     # one-time: authenticate Claude Code
 docker compose up -d
 ```
 
@@ -122,9 +122,27 @@ deploy customer Acme from NetBox in EVE-NG
 ```
 /run nmap -sV 10.0.0.1    — execute a shell command directly
 /new                       — clear context, start a fresh conversation
+/cancel                    — cancel the last queued task
+/abort                     — kill the currently running task
 /status                    — show task queue depth
+/stats                     — today's usage stats
 /help                      — available commands
 ```
+
+## Teaching Skills
+
+Press **Teach** in Telegram, demonstrate the workflow, then press **End Teaching**.
+The bot generates a skill draft and asks for confirmation before saving.
+
+Approved skills are saved to `/tmp/skills/` inside the claude-code container.
+To make a skill permanent, copy it to the host:
+
+```bash
+docker exec h-cli-claude cat /tmp/skills/topic.md > skills/private/topic.md
+# With ENV_TAG: docker exec h-cli-<tag>-claude cat /tmp/skills/...
+```
+
+Skills in `skills/public/` are shared (tracked in git). Skills in `skills/private/` are deployment-specific (gitignored).
 
 ## Vector Memory (optional)
 
@@ -199,6 +217,37 @@ Then rebuild: `docker compose --profile monitor up -d`
 Grafana is available at `http://your-host:2405` (login: `admin` / your `GRAFANA_ADMIN_PASSWORD`).
 
 The `/stats` command in Telegram shows today's usage (tokens, cost, gate checks) — this works even without the monitor profile since it reads from Redis.
+
+## Backup & Sync
+
+Local tarball + remote rsync for all deployment state. Covers `.env`, `context.md`, `ssh-keys/`, `logs/`, `data/`, `skills/private/`.
+
+```bash
+./backup.sh                    # local tar (always) + remote rsync (if configured)
+```
+
+- **Local**: timestamped tarball in `backups/`, keeps last 5
+- **Remote**: set `BACKUP_TARGET=user@host:/path/` in `.env`
+- **Bidirectional**: pulls processed training data from `data/import/` on the remote
+- **Cron**: `install.sh` registers a daily backup at 3 AM
+
+Clone the repo, rsync the state back, `docker compose up` — full recovery.
+
+## Training Data Export
+
+Export correlated traces for fine-tuning, Q&A generation, or RLHF. Joins dispatcher audit log + firewall audit log by task_id — one JSONL record per task with user message, tool calls (allow/deny/output), and response.
+
+```bash
+./export-traces.py                       # default: logs/ -> traces.jsonl
+./export-traces.py --since 2026-02-18   # filter by date
+./export-traces.py -o training.jsonl    # custom output
+```
+
+```json
+{"task_id":"...","user_message":"...","tool_calls":[{"command":"...","allowed":true,"output_length":2044}],"response":"..."}
+```
+
+Stdlib only, no dependencies.
 
 ## log4AI — Shell Command Logger
 
