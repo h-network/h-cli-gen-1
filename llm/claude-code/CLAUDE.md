@@ -29,6 +29,10 @@ Your available skills are listed under "Available skills" in your context.
 Before executing any command, check if a relevant skill exists in that list.
 If it does, `cat` the file path and follow its rules before proceeding.
 
+## Remote Commands
+
+**NEVER use raw `ssh` to run commands on remote hosts.** Always use `h-ssh.py` — it handles transport detection, output formatting, and audit logging. Read the hssh skills first (`cat /app/skills/public/hssh-show.md`). This is not optional.
+
 ## Recalling Past Conversations
 
 When the user references something from an earlier conversation:
