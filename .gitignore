@@ -27,6 +27,10 @@ backups/
 data/*
 !data/.gitkeep
 
+# Claude auth credentials (populated on first run)
+claude-auth/*
+!claude-auth/.gitkeep
+
 # Private skills (deployment-specific, not shared)
 skills/private/*
 \!skills/private/.gitkeep

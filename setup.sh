@@ -180,28 +180,6 @@ echo ""
 echo "[*] Running install.sh..."
 bash install.sh
 
-# --- OAuth / Claude Code authentication ---
-
-echo ""
-echo "=== Claude Code Authentication ==="
-echo ""
-echo "h-cli needs a Claude Max/Pro subscription. You need to authenticate once."
-echo ""
-read -rp "Set up Claude Code authentication now? [Y/n]: " OAUTH_ANSWER
-OAUTH_ANSWER="${OAUTH_ANSWER:-Y}"
-if [[ "$OAUTH_ANSWER" =~ ^[Yy]|^$ ]]; then
-    echo ""
-    echo "[*] Starting Claude Code login..."
-    echo "    A browser URL will appear — authenticate and paste the code back."
-    echo ""
-    docker compose run -it --rm claude-code setup-token
-    echo ""
-    echo "[*] Authentication complete."
-else
-    echo "[*] Skipping OAuth setup. Run later:"
-    echo "    docker compose run -it --rm claude-code setup-token"
-fi
-
 # --- Done ---
 
 echo ""
@@ -209,14 +187,18 @@ echo "=== Setup Complete ==="
 echo ""
 if [ -n "$ENV_TAG" ]; then
     TAG_FILTER="h-cli-${ENV_TAG}"
+    CLAUDE_CONTAINER="h-cli-${ENV_TAG}-claude"
 else
     TAG_FILTER="h-cli"
+    CLAUDE_CONTAINER="h-cli-claude"
 fi
 echo "Next steps:"
 echo "  1. Review .env:        nano $SCRIPT_DIR/.env"
 echo "  2. Edit persona:       nano $SCRIPT_DIR/context.md"
 echo "  3. Add SSH key:        ssh-copy-id -i $SCRIPT_DIR/ssh-keys/id_ed25519.pub user@host"
 echo "  4. Start services:     docker compose up -d"
-echo "  5. Verify:             docker ps | grep $TAG_FILTER"
-echo "  6. Tear down:          docker compose down"
+echo "  5. Authenticate:       docker exec -it $CLAUDE_CONTAINER claude"
+echo "                         (interactive login, then Ctrl+C when done)"
+echo "  6. Verify:             docker ps | grep $TAG_FILTER"
+echo "  7. Tear down:          docker compose down"
 echo ""

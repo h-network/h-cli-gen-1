@@ -225,8 +225,8 @@ services:
       - TIMESCALE_URL=${TIMESCALE_URL:-}
       - LOG_DIR=/var/log/hcli
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
+      - ./claude-auth:/tmp/claude-staging:ro
       - ./llm/blocked-patterns.txt:/app/blocked-patterns.txt:ro
       - ./skills:/app/skills:ro
       - ./logs/claude:/var/log/hcli/claude
