@@ -10,7 +10,7 @@ Send a message. Get it done.
 
 ## What it is
 
-A Telegram bot backed by Claude Code. You type plain English, it executes commands in a hardened container and returns results. Session context persists for 4 hours — it remembers "that host" and "same scan again." Context is injected as plain text, not JSONL replay — [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) for the same conversation.
+A Telegram bot backed by Claude Code, Ollama, or vLLM. You type plain English, it executes commands in a hardened container and returns results. Session context persists for 4 hours — it remembers "that host" and "same scan again." Context is injected as plain text, not JSONL replay — [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) for the same conversation.
 
 ```
 "scan 192.168.1.1"              →  nmap results in 10 seconds
@@ -18,7 +18,7 @@ A Telegram bot backed by Claude Code. You type plain English, it executes comman
 "deploy customer X in EVE-NG"   →  pulls from NetBox, builds the lab
 ```
 
-Runs on your Claude Max/Pro subscription. Zero API costs.
+Runs on your Claude Max/Pro subscription (zero API costs), or bring your own model via Ollama or vLLM.
 
 ## How it fits your infrastructure
 
