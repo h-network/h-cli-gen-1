@@ -47,7 +47,7 @@ Method A: --resume (JSONL replay)
   API duration:  6,719ms
 
 Method B: Plain text injection
-  Context size:  50 KB (capped)
+  Context size:  30 KB (capped)
   Input tokens:  37,207
   Cost:          $0.1385
   API duration:  12,662ms
@@ -76,7 +76,7 @@ For an infrastructure assistant like h-cli, the user-assistant dialogue carries 
 
 **What you lose:**
 - The model doesn't see its own previous tool calls. If the user says "run that again," the model needs enough conversational context to infer what "that" was from the dialogue, not from a tool_use record.
-- Longer conversations may lose nuance as plain text is capped (50KB in h-cli's case).
+- Longer conversations may lose nuance as plain text is capped (30KB Redis history + 50KB session chunks in h-cli's case).
 
 **What you gain:**
 - 71% fewer input tokens per message
@@ -102,7 +102,11 @@ h-cli implements this in three tiers:
 │  When accumulated size > 100KB, history dumped to text   │
 │  files. Up to 50KB injected into system prompt.          │
 ├──────────────────────────────────────────────────────────┤
-│  Tier 3: Vector Memory (permanent, optional)             │
+│  Tier 3: Skills (per-message, automatic)                 │
+│  Matched skill files from skills/ directory. Injected    │
+│  into system prompt after chunks. 20KB budget.           │
+├──────────────────────────────────────────────────────────┤
+│  Tier 4: Vector Memory (permanent, optional)             │
 │  Curated Q&A pairs in Qdrant. Semantic search via        │
 │  memory_search tool. For long-term knowledge.            │
 ├──────────────────────────────────────────────────────────┤
@@ -113,8 +117,8 @@ h-cli implements this in three tiers:
 ```
 
 Key files:
-- `claude-code/dispatcher.py` — `_build_conversation_context()` formats Redis history, `build_system_prompt()` injects chunks
-- `claude-code/CLAUDE.md` — conciseness directive to counteract verbose responses
+- `orchestration/worker.py` — `_build_conversation_context()` formats Redis history, `build_system_prompt()` injects chunks + skills
+- `llm/claude-code/CLAUDE.md` — conciseness directive to counteract verbose responses
 
 ## Applicability
 

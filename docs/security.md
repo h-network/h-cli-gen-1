@@ -1,6 +1,6 @@
 # Security
 
-44 security items implemented. Full audit trail: [SECURITY-HARDENING.md](../SECURITY-HARDENING.md)
+44 security items implemented. Full audit trail: [SECURITY-HARDENING.md](SECURITY-HARDENING.md)
 
 ## Ground Rules: A TCP/IP Model for AI Safety
 
@@ -43,14 +43,14 @@ The system prompt is documentation. The gate is enforcement. The layered model m
 ## Highlights
 
 - **Asimov firewall**: MCP proxy between Claude and core. Two layers: deterministic pattern denylist (always active, zero latency) + independent Haiku gate check (on by default, resistant to conversational prompt injection)
-- **Network isolation**: `h-network-frontend` (telegram-bot, Redis) and `h-network-backend` (core) are separate Docker networks — only claude-code bridges both
+- **Network isolation**: Two Docker networks — `h-network-frontend` and `h-network-backend`. Redis bridges both (designated message bus). Claude-code and Grafana are on both. Core is backend-only. Telegram-bot is frontend-only.
 - **Fail-closed auth**: `ALLOWED_CHATS` allowlist — empty = nobody gets in
 - **Non-root**: All containers run as `hcli` (uid 1000), not root
 - **Capabilities**: `NET_RAW`/`NET_ADMIN` on core only; `cap_drop: ALL` + `no-new-privileges` on telegram-bot and claude-code; `read_only` rootfs on telegram-bot
 - **Sudo whitelist**: only commands in `SUDO_COMMANDS` are allowed via sudo (resolved to full paths, fail-closed)
 - **HMAC-signed results**: Dispatcher signs, telegram-bot verifies. Prevents Redis result spoofing.
 - **Redis auth**: password-protected, 2GB memory cap, LRU eviction, RDB + AOF persistence
-- **Session chunking**: Auto-rotate at 100KB, up to 50KB of recent context injected into system prompt
+- **Session chunking**: Auto-rotate at 100KB. Two injection budgets: 30KB Redis history (prepended to user message) + 50KB session chunks (injected into system prompt)
 - **Tool restriction**: Claude Code restricted to `mcp__h-cli-core__run_command` and `mcp__h-cli-memory__memory_search` only
 - **Pinned deps**: all Python packages pinned to major version ranges, base images pinned
 
@@ -59,18 +59,23 @@ The system prompt is documentation. The gate is enforcement. The layered model m
 | Container | User | Capabilities | Rootfs | Networks |
 |-----------|------|-------------|--------|----------|
 | `telegram-bot` | `hcli` (1000) | None (`cap_drop: ALL`) | Read-only | frontend only |
-| `redis` | `redis` (default) | Default | Writable | frontend only |
+| `redis` | `redis` (default) | Default | Writable | frontend + backend |
 | `claude-code` | `hcli` (1000) | None (`cap_drop: ALL`) | Writable | frontend + backend |
 | `core` | `hcli` (1000) | `NET_RAW`, `NET_ADMIN` | Writable | backend only |
+| `grafana` | `grafana` (default) | Default | Writable | frontend + backend |
+| `timescaledb` | `postgres` (default) | Default | Writable | backend only |
+| `grafana-renderer` | `node` (default) | Default | Writable | backend only |
+| `qdrant` | `qdrant` (default) | Default | Writable | backend only |
+| `cve-check` | `hcli` (1000) | None (`cap_drop: ALL`) | Writable | frontend only |
 
 ## Data Access
 
 | Container | Redis | Filesystem writes | Secrets it holds |
 |-----------|-------|-------------------|------------------|
-| `telegram-bot` | Read/write (task queue + results) | Logs only | `TELEGRAM_BOT_TOKEN`, `REDIS_PASSWORD`, `RESULT_HMAC_KEY` |
+| `telegram-bot` | Read/write (task queue + results) | Logs only | `TELEGRAM_BOT_TOKEN`, `REDIS_PASSWORD`, `RESULT_HMAC_KEY`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_API_TOKEN` |
 | `redis` | N/A (is the store) | `/data` (RDB + AOF) | `REDIS_PASSWORD` |
 | `claude-code` | Read/write (tasks, sessions, memory) | Logs, session chunks, `~/.claude/` | `REDIS_PASSWORD`, `RESULT_HMAC_KEY`, Claude credentials (volume) |
-| `core` | None | Logs only | SSH keys (copied at startup), integration tokens (NetBox, Grafana, EVE-NG) |
+| `core` | Write (PUBLISH audit events) | Logs only | SSH keys (copied at startup), integration tokens (NetBox, Grafana, EVE-NG), `QDRANT_API_KEY` |
 
 ## Sudo Whitelist (core only)
 
@@ -87,7 +92,7 @@ Everything else is denied. Fail-closed — if a command isn't in the list, sudo 
 | Integration | Container | Access | Required scope |
 |-------------|-----------|--------|----------------|
 | NetBox | `core` | REST API (read) | Read-only API token recommended |
-| Grafana | `core` | REST API (read) | Viewer role token recommended |
+| Grafana | `core`, `telegram-bot` | REST API (read, render) | Viewer role token recommended |
 | EVE-NG | `core` | REST API (read/write) | Lab user credentials |
 
-All integration tokens live only in core's environment. No other container sees them.
+Core holds NetBox and EVE-NG tokens exclusively. Grafana tokens are shared with telegram-bot for inline graph rendering (`[action:graph:URL]`).

@@ -86,58 +86,77 @@ ssh eve-host "pgrep -a qemu_wrapper | grep '{labname}'"
 
 Once you have the dynamic port, connect via telnet for fully autonomous router interaction.
 
-### Basic Connection
+### Using h-ssh (recommended)
+
+h-ssh has a built-in telnet transport (`hssh_llm/h-ssh/transports/telnet.py`) with ANSI stripping, `--More--` handling, per-vendor prompt detection, and login sequences. Use `telnet-*` vendor types:
+
+```bash
+# Single device
+h-ssh.py --user root --target R1:eve-host:56611:telnet-junos --show "show ospf neighbor"
+
+# Parallel batch (all routers)
+h-ssh.py --user root --job - --json --quiet <<'EOF'
+[
+  {"target": "R1:eve-host:56611:telnet-junos", "show": "show ospf neighbor"},
+  {"target": "R2:eve-host:51035:telnet-junos", "show": "show ospf neighbor"}
+]
+EOF
+```
+
+### Raw socket connection (Python)
+
+> **Note:** Python 3.13 removed `telnetlib`. Use raw sockets instead.
 
 ```python
-import telnetlib
+import socket
 import time
 
 host = "eve-host-ip"
 port = 56611  # From dynamic discovery
 
-tn = telnetlib.Telnet(host, port, timeout=10)
+sock = socket.create_connection((host, port), timeout=10)
 time.sleep(2)
-tn.write(b"\n")
+sock.sendall(b"\n")
 time.sleep(1)
 ```
 
 ### Juniper vJunOS: Discover Router Info
 
 ```python
-tn.write(b"show chassis hardware | no-more\n")
+sock.sendall(b"show chassis hardware | no-more\n")
 time.sleep(2)
 
-tn.write(b"show version | no-more\n")
+sock.sendall(b"show version | no-more\n")
 time.sleep(2)
 
-tn.write(b"show interfaces terse | no-more\n")
+sock.sendall(b"show interfaces terse | no-more\n")
 time.sleep(2)
 
-output = tn.read_very_eager().decode('ascii', errors='ignore')
+output = sock.recv(65535).decode('ascii', errors='ignore')
 ```
 
 ### Juniper vJunOS: Configure Router
 
 ```python
-tn.write(b"configure\n")
+sock.sendall(b"configure\n")
 time.sleep(1)
 
-tn.write(b"set system host-name R1\n")
+sock.sendall(b"set system host-name R1\n")
 time.sleep(1)
 
 # Root password REQUIRED for commit on Juniper
-tn.write(b"set system root-authentication plain-text-password\n")
+sock.sendall(b"set system root-authentication plain-text-password\n")
 time.sleep(1)
-tn.write(b"YourPassword\n")
+sock.sendall(b"YourPassword\n")
 time.sleep(1)
-tn.write(b"YourPassword\n")
+sock.sendall(b"YourPassword\n")
 time.sleep(2)
 
-tn.write(b"commit and-quit\n")
+sock.sendall(b"commit and-quit\n")
 time.sleep(4)
 
-output = tn.read_very_eager().decode('ascii', errors='ignore')
-tn.close()
+output = sock.recv(65535).decode('ascii', errors='ignore')
+sock.close()
 ```
 
 ---
