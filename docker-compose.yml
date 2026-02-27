@@ -9,6 +9,7 @@ services:
     hostname: h-cli${ENV_TAG:+-}${ENV_TAG}-core
     volumes:
       - ${SSH_KEYS_DIR:-./ssh-keys}:/tmp/ssh-keys-staging:ro
+      - ./skills:/app/skills:ro
       - ./logs/core:/var/log/hcli/core
       - ./logs/memory:/var/log/hcli/memory
       - ./logs/sessions:/var/log/hcli/sessions:ro
@@ -27,17 +28,20 @@ services:
       - EVE_NG_URL=${EVE_NG_URL:-}
       - EVE_NG_USERNAME=${EVE_NG_USERNAME:-}
       - EVE_NG_PASSWORD=${EVE_NG_PASSWORD:-}
+      - LAMBDAAPI=${LAMBDAAPI:-}
       - SUDO_COMMANDS=${SUDO_COMMANDS:-nmap,tcpdump,traceroute,mtr,ping,ss,ip,iptables}
       - QDRANT_HOST=h-cli${ENV_TAG:+-}${ENV_TAG}-qdrant
       - QDRANT_PORT=6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-hcli_memory}
       - TIMESCALE_URL=${TIMESCALE_URL:-}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
     cap_add:
       - NET_RAW
       - NET_ADMIN
     shm_size: 1g
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf --max-time 2 http://localhost:8083/sse >/dev/null 2>&1; [ $? -eq 0 ] || [ $? -eq 28 ]"]
+      test: ["CMD-SHELL", "curl -sf --max-time 2 http://localhost:8083/sse >/dev/null 2>&1; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 28 ]"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -47,7 +51,7 @@ services:
 
   h-cli-timescaledb:
     profiles: ["monitor"]
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.25.1-pg16
     container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-timescaledb
     hostname: h-cli${ENV_TAG:+-}${ENV_TAG}-timescaledb
     environment:
@@ -68,9 +72,14 @@ services:
 
   h-cli-grafana-renderer:
     profiles: ["monitor"]
-    image: grafana/grafana-image-renderer:latest
+    image: grafana/grafana-image-renderer:v5.6.0
     container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-grafana-renderer
     hostname: h-cli${ENV_TAG:+-}${ENV_TAG}-grafana-renderer
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /render/version HTTP/1.0\\r\\n\\r\\n\" > /dev/tcp/localhost/8081'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - h-network-backend
     restart: unless-stopped
@@ -93,6 +102,11 @@ services:
       - ./monitor/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
       - ./monitor/dashboard.yml:/etc/grafana/provisioning/dashboards/dashboard.yml:ro
       - ./monitor/dashboards:/etc/grafana/provisioning/dashboards/files:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       h-cli-timescaledb:
         condition: service_healthy
@@ -111,7 +125,7 @@ services:
     volumes:
       - ./data/qdrant:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-sf", "-H", "api-key: ${QDRANT__SERVICE__API_KEY}", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\napi-key: $$QDRANT__SERVICE__API_KEY\\r\\n\\r\\n\" > /dev/tcp/localhost/6333'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -135,24 +149,26 @@ services:
       retries: 3
     networks:
       - h-network-frontend
+      - h-network-backend
     restart: unless-stopped
 
   telegram-bot:
     build:
       context: .
-      dockerfile: telegram-bot/Dockerfile
+      dockerfile: interfaces/telegram-bot/Dockerfile
     container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-telegram
     hostname: telegram-bot
     volumes:
       - ./logs/telegram:/var/log/hcli/telegram
       - ./logs/sessions:/var/log/hcli/sessions
+      - ./logs/media:/var/log/hcli/media
       - ./skills:/app/skills:ro
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - ALLOWED_CHATS=${ALLOWED_CHATS}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-3}
-      - TASK_TIMEOUT=${TASK_TIMEOUT:-300}
+      - TASK_TIMEOUT=${TASK_TIMEOUT:-600}
       - RESULT_HMAC_KEY=${RESULT_HMAC_KEY}
       - CHAT_NAMES=${CHAT_NAMES:-}
       - GRAFANA_INTERNAL_URL=${GRAFANA_INTERNAL_URL:-}
@@ -170,7 +186,7 @@ services:
       - /tmp
       - /run
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import redis; redis.from_url('$REDIS_URL').ping()\""]
+      test: ["CMD-SHELL", "python3 -c \"import redis; redis.from_url('$$REDIS_URL').ping()\""]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -183,7 +199,7 @@ services:
   claude-code:
     build:
       context: .
-      dockerfile: claude-code/Dockerfile
+      dockerfile: llm/claude-code/Dockerfile
     container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-claude
     hostname: claude-code
     environment:
@@ -209,15 +225,15 @@ services:
       - TIMESCALE_URL=${TIMESCALE_URL:-}
       - LOG_DIR=/var/log/hcli
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
-      - ./blocked-patterns.txt:/app/blocked-patterns.txt:ro
+      - ./llm/blocked-patterns.txt:/app/blocked-patterns.txt:ro
       - ./skills:/app/skills:ro
       - ./logs/claude:/var/log/hcli/claude
       - ./logs/firewall:/var/log/hcli/firewall
       - ./logs/sessions:/var/log/hcli/sessions
       - ./logs/sessions:/app/sessions:ro
       - ./data:/app/data:ro
-      - ./data/claude-credentials:/home/hcli/.claude
     cap_drop:
       - ALL
     security_opt:
@@ -239,6 +255,34 @@ services:
       - h-network-frontend
       - h-network-backend
     restart: unless-stopped
+
+  cve-check:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: security/cve-check/Dockerfile
+    container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-cve-check
+    hostname: cve-check
+    environment:
+      - NVD_API_KEY=${NVD_API_KEY:-}
+      - CVE_CHECK_MODEL=${CVE_CHECK_MODEL:-sonnet}
+      - ANTHROPIC_BASE_URL=${CVE_CHECK_BASE_URL:-}
+      - ANTHROPIC_API_KEY=${CVE_CHECK_API_KEY:-}
+    volumes:
+      - ./llm/blocked-patterns.txt:/app/blocked-patterns.txt:ro
+      - ./skills:/app/skills:ro
+      - ./data:/app/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f cve-check.py > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - h-network-frontend
 
 networks:
   h-network-frontend:

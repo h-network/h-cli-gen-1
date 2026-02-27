@@ -96,17 +96,33 @@ else
     rm -f /etc/sudoers.d/hcli
 fi
 
-# ── Memory server (background) ────────────────────────────────────
-if [ -n "${QDRANT_API_KEY:-}" ] && [ -n "${QDRANT_HOST:-}" ]; then
-    if curl -sf --max-time 3 "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/healthz" >/dev/null 2>&1; then
-        echo "[entrypoint] Starting memory server on port 8084..."
-        gosu hcli python3 -u /app/memory_server.py &
-    else
-        echo "[entrypoint] Qdrant not reachable at ${QDRANT_HOST}:${QDRANT_PORT:-6333}, memory server disabled."
+# ── Memory server (supervised background) ─────────────────────────
+# Always start memory_server.py — it handles Qdrant unavailability
+# gracefully (memory_search returns "not initialized" if _init fails).
+MEMORY_PID=""
+
+cleanup() {
+    if [ -n "$MEMORY_PID" ] && kill -0 "$MEMORY_PID" 2>/dev/null; then
+        echo "[entrypoint] Forwarding SIGTERM to memory server (PID $MEMORY_PID)..."
+        kill "$MEMORY_PID" 2>/dev/null
+        wait "$MEMORY_PID" 2>/dev/null
     fi
-else
-    echo "[entrypoint] QDRANT_API_KEY not set, memory server disabled."
-fi
+}
+trap cleanup TERM INT
+
+echo "[entrypoint] Starting memory server on port 8084..."
+gosu hcli python3 -u /app/memory_server.py &
+MEMORY_PID=$!
+echo "[entrypoint] Memory server started (PID $MEMORY_PID)"
+
+# Monitor memory server in background — log if it exits unexpectedly
+(
+    wait "$MEMORY_PID" 2>/dev/null
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo "[entrypoint] WARNING: memory server exited with code $EXIT_CODE"
+    fi
+) &
 
 echo "[entrypoint] Starting h-cli-core as hcli..."
 exec gosu hcli "$@"

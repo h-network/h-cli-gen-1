@@ -46,6 +46,11 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 COPY core/mcp_server.py .
 COPY core/memory_server.py .
 
+COPY skills/public/ /app/skills/public/
+COPY hssh_llm/h-ssh/ /app/h-ssh/
+RUN pip install --no-cache-dir --break-system-packages -r /app/h-ssh/requirements.txt
+ENV PATH="/app/h-ssh:${PATH}"
+
 COPY core/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
