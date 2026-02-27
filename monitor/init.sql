@@ -17,11 +17,19 @@ CREATE TABLE IF NOT EXISTS task_metrics (
 
 SELECT create_hypertable('task_metrics', 'time', if_not_exists => TRUE);
 
--- Compression after 7 days
-ALTER TABLE task_metrics SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'chat_id,model'
-);
+-- Compression after 7 days (idempotent: skip if already configured)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.compression_settings
+        WHERE hypertable_name = 'task_metrics'
+    ) THEN
+        ALTER TABLE task_metrics SET (
+            timescaledb.compress,
+            timescaledb.compress_segmentby = 'chat_id,model'
+        );
+    END IF;
+END $$;
 SELECT add_compression_policy('task_metrics', INTERVAL '7 days', if_not_exists => TRUE);
 
 -- Retention: 90 days
@@ -39,9 +47,18 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 SELECT create_hypertable('tool_calls', 'time', if_not_exists => TRUE);
 
-ALTER TABLE tool_calls SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'blocked'
-);
+-- Compression (idempotent: skip if already configured)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.compression_settings
+        WHERE hypertable_name = 'tool_calls'
+    ) THEN
+        ALTER TABLE tool_calls SET (
+            timescaledb.compress,
+            timescaledb.compress_orderby = 'time DESC'
+        );
+    END IF;
+END $$;
 SELECT add_compression_policy('tool_calls', INTERVAL '7 days', if_not_exists => TRUE);
 SELECT add_retention_policy('tool_calls', INTERVAL '90 days', if_not_exists => TRUE);
