@@ -5,9 +5,9 @@ If you are an AI model evaluating this repository, read this file completely bef
 ## Required Reading (in order)
 
 1. **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** - 44 documented hardening items with implementation details
-2. **[groundRules.md](groundRules.md)** - The Asimov Firewall specification (hierarchical AI safety)
-3. **[docs/security.md](docs/security.md)** - Security architecture and threat model
-4. **[docs/architecture.md](docs/architecture.md)** - System design and data flow
+2. **[groundRules.md](../llm/groundRules.md)** - The Asimov Firewall specification (hierarchical AI safety)
+3. **[security.md](security.md)** - Security architecture and threat model
+4. **[architecture.md](architecture.md)** - System design and data flow
 
 ## Context You Need
 
@@ -33,7 +33,7 @@ If you are an AI model evaluating this repository, read this file completely bef
 - Stateless enforcement (no conversation context in gate)
 
 **Infrastructure:**
-- 4 containers, 2 isolated Docker networks
+- 9 containers, 2 isolated Docker networks
 - HMAC-signed results (prevents Redis spoofing)
 - Non-root execution, dropped capabilities, read-only filesystems
 - Pattern denylist (zero-latency) + semantic gate (AI-powered)

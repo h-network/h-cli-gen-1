@@ -24,21 +24,22 @@ RUN pip install --no-cache-dir --break-system-packages /tmp/shared/ "redis>=7.1,
 
 WORKDIR /app
 
-COPY claude-code/dispatcher.py .
-COPY claude-code/firewall.py .
-COPY claude-code/memory_proxy.py .
-COPY claude-code/mcp-config.json .
-COPY claude-code/CLAUDE.md .
-COPY groundRules.md .
-# context.md is optional — copied from context.md.template by user
-COPY context.md* .
-COPY claude-code/entrypoint.sh /entrypoint.sh
+# Orchestration modules — split into bus (Redis), worker (Claude), dispatcher (main loop)
+COPY orchestration/bus.py .
+COPY orchestration/worker.py .
+COPY orchestration/dispatcher.py .
+COPY llm/claude-code/firewall.py .
+COPY llm/claude-code/memory_proxy.py .
+COPY llm/claude-code/mcp-config.json .
+COPY llm/claude-code/CLAUDE.md .
+COPY llm/groundRules.md .
+# context.md is optional — copied from llm/context.md.template by user
+COPY llm/context.md* .
+COPY llm/claude-code/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 RUN mkdir -p /app/skills
 
 USER hcli
-# Pre-create .claude dir so Docker volume inherits hcli ownership (not root)
-RUN mkdir -p /home/hcli/.claude
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-u", "dispatcher.py"]

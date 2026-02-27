@@ -1,18 +1,22 @@
 """h-cli Telegram Bot — async command interface with Redis task queue."""
 
 import asyncio
+import base64
 import functools
 import hashlib
 import hmac
 import json
 import os
 import re
+import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 import redis.asyncio as aioredis
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
@@ -58,14 +62,18 @@ if not RESULT_HMAC_KEY:
 TELEGRAM_MAX_LEN = 4096
 REDIS_TASKS_KEY = "hcli:tasks"
 REDIS_RESULT_PREFIX = "hcli:results:"
-REDIS_PENDING_PREFIX = "hcli:pending:"
+REDIS_CONTROL_PREFIX = "hcli:control:"  # abort control channel
 SESSION_HISTORY_PREFIX = "hcli:session_history:"
 SESSION_SIZE_PREFIX = "hcli:session_size:"
 SESSION_CHUNK_DIR = os.environ.get("SESSION_CHUNK_DIR", "/var/log/hcli/sessions")
-POLL_INTERVAL = 1  # seconds
+NOTIFY_POLL_FALLBACK = 10  # seconds between fallback GET checks during subscribe
 TEACH_PREFIX = "hcli:teach:"  # teach mode flag + turns
 TEACH_TTL = 3600              # 1h auto-expire if user forgets
-_show_queue_msg: dict[int, bool] = {}  # per-chat toggle
+_verbose_mode: dict[int, bool] = {}  # per-chat verbose toggle (default ON)
+ACTIVITY_IDLE_TIMEOUT = 30   # seconds with no events before auto-unsubscribe
+ACTIVITY_MAX_COMMANDS = 8    # max commands shown in activity message
+ACTIVITY_CMD_MAX_LEN = 60    # truncate commands longer than this
+ACTIVITY_EDIT_INTERVAL = 1   # min seconds between Telegram message edits
 
 _CHAT_NAMES = {}
 for _pair in os.environ.get("CHAT_NAMES", "").split(","):
@@ -76,6 +84,12 @@ for _pair in os.environ.get("CHAT_NAMES", "").split(","):
 
 def _chat_dir_name(chat_id) -> str:
     return _CHAT_NAMES.get(str(chat_id), str(chat_id))
+
+
+def _chat_tasks_key(chat_id) -> str:
+    """Redis key for per-chat task tracking list."""
+    return f"hcli:chat:{chat_id}:tasks"
+
 _background_tasks: set[asyncio.Task] = set()  # prevent GC of fire-and-forget tasks
 
 # ── Action system ─────────────────────────────────────────────────────────
@@ -135,7 +149,7 @@ async def _handle_graph_action(update: Update, payload: str) -> None:
         )
 
 
-_ACTION_HANDLERS: dict[str, callable] = {
+_ACTION_HANDLERS: dict[str, Callable] = {
     "graph": _handle_graph_action,
 }
 
@@ -145,7 +159,7 @@ _chat_model: dict[int, str] = {}  # chat_id → "haiku" or "opus"
 
 def _model_keyboard():
     return ReplyKeyboardMarkup(
-        [["⚡ Fast", "🧠 Deep"], ["📊 Stats", "📚 Skills"], ["📝 Teach", "📖 End Teaching"], ["🔕 Queue Msg"]],
+        [["⚡ Fast", "🧠 Deep"], ["📊 Stats", "📚 Skills"], ["📝 Teach", "📖 End Teaching"], ["📡 Verbose"]],
         resize_keyboard=True,
     )
 
@@ -328,6 +342,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/run <command> — Execute a shell command directly\n"
         "/new    — Clear context, start a fresh conversation\n"
         "/cancel — Cancel the last queued task\n"
+        "/abort  — Kill the currently running task\n"
         "/status — Show task queue depth\n"
         "/stats  — Today's usage stats (tokens, cost, tasks)\n"
         "/help   — This message\n\n"
@@ -377,7 +392,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     total_cost = cost + gate_cost
 
     lines = [
-        f"**Stats for {today}**",
+        f"Stats for {today}",
         f"Tasks: {tasks} ({errors} errors, {error_pct:.0f}%)",
         f"Tokens: {in_tok:,} in / {out_tok:,} out / {cache_r:,} cache",
         f"Avg response: {avg_dur:.1f}s ({avg_turns:.1f} turns)",
@@ -423,15 +438,15 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             name = fname[:-3]
             tag = "" if scope == "public" else " [private]"
             if keywords:
-                lines.append(f"  \u2022 **{name}** — {keywords}{tag}")
+                lines.append(f"  \u2022 {name} — {keywords}{tag}")
             else:
-                lines.append(f"  \u2022 **{name}**{tag}")
+                lines.append(f"  \u2022 {name}{tag}")
             total += 1
 
     if not lines:
         await update.message.reply_text("No skills loaded.")
         return
-    header = f"**\U0001f4da Skills ({total})**"
+    header = f"\U0001f4da Skills ({total})"
     await update.message.reply_text(header + "\n" + "\n".join(lines))
 
 
@@ -483,10 +498,14 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if chunk_path:
         await update.message.reply_text(
             f"Session saved to {os.path.basename(chunk_path)}. "
-            "Context cleared — next message starts fresh."
+            "Context cleared — next message starts fresh.",
+            reply_markup=_model_keyboard(),
         )
     else:
-        await update.message.reply_text("Context cleared. Next message starts fresh.")
+        await update.message.reply_text(
+            "Context cleared. Next message starts fresh.",
+            reply_markup=_model_keyboard(),
+        )
 
 
 @auth_required
@@ -494,10 +513,10 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Cancel the most recent pending/in-flight task for this chat."""
     r = _redis(context)
     chat_id = update.effective_chat.id
-    pending_key = f"{REDIS_PENDING_PREFIX}{chat_id}"
+    chat_tasks_key = _chat_tasks_key(chat_id)
 
     # Pop the most recent pending task for this chat
-    task_id = await r.rpop(pending_key)
+    task_id = await r.rpop(chat_tasks_key)
     if not task_id:
         await update.message.reply_text("No queued tasks to cancel.")
         return
@@ -513,7 +532,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await r.lrem(REDIS_TASKS_KEY, -1, raw_task)
             break
 
-    # Write a signed cancellation result so _poll_result picks it up naturally
+    # Write a signed cancellation result so the subscriber picks it up
     output = "Task cancelled."
     completed_at = datetime.now(timezone.utc).isoformat()
     msg = f"{task_id}:{output}:{completed_at}"
@@ -531,7 +550,162 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "task_cancelled",
         extra={"user_id": update.effective_user.id, "task_id": task_id},
     )
-    await update.message.reply_text(f"Cancelled task `{task_id[:8]}`.")
+    await update.message.reply_text(f"Cancelled task {task_id[:8]}.")
+
+
+@auth_required
+async def cmd_abort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Abort the currently running task — signal dispatcher to kill subprocess."""
+    r = _redis(context)
+    chat_id = update.effective_chat.id
+    chat_tasks_key = _chat_tasks_key(chat_id)
+
+    # Get the most recent task (still in-flight)
+    task_id = await r.lindex(chat_tasks_key, -1)
+    if not task_id:
+        await update.message.reply_text("No active task to abort.")
+        return
+
+    # Signal the dispatcher to kill the subprocess via control channel
+    control_channel = f"{REDIS_CONTROL_PREFIX}{task_id}"
+    await r.publish(control_channel, json.dumps({"action": "abort"}))
+
+    audit.info(
+        "task_aborted",
+        extra={"user_id": update.effective_user.id, "task_id": task_id},
+    )
+    await update.message.reply_text(f"Aborted task {task_id[:8]}.")
+
+
+def _format_activity(task_id: str, commands: list[dict], done: bool) -> str:
+    """Format the activity stream message."""
+    icon = "\u2705" if done else "\u23f3"
+    header = f"{icon} Task {task_id[:8]}"
+    if not commands:
+        return header + ("\n\nDone \u2014 no commands captured." if done else "")
+    lines = [header, ""]
+    for entry in commands:
+        cmd = entry["cmd"]
+        if len(cmd) > ACTIVITY_CMD_MAX_LEN:
+            cmd = cmd[:ACTIVITY_CMD_MAX_LEN - 3] + "..."
+        lines.append(f"> {cmd}")
+        if entry["done"]:
+            dur = f" {entry['duration']:.1f}s" if entry.get("duration") is not None else ""
+            lines.append(f"\u2713{dur}")
+        else:
+            lines.append("\u23f3 running...")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+async def _stream_activity(
+    chat_id: int, task_id: str, msg, commands: list[dict],
+    r: aioredis.Redis | None = None,
+) -> None:
+    """Subscribe to audit channel and stream activity to editable message.
+
+    Checks task state on idle to detect abort/completion without waiting
+    for the full idle timeout.
+    """
+    channel = f"hcli:audit:{task_id}"
+    state_key = f"hcli:task:{task_id}:state"
+    last_event_time = time.monotonic()
+    last_edit_time = 0.0
+    last_state_check = 0.0
+    pending_edit = False
+    STATE_CHECK_INTERVAL = 5  # check task state every 5s of idle
+
+    # Dedicated connection for pub/sub (can't share with main pool)
+    pubsub_redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    pubsub = pubsub_redis.pubsub()
+
+    try:
+        await pubsub.subscribe(channel)
+
+        while True:
+            raw = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=1.0,
+            )
+            now = time.monotonic()
+
+            if raw is not None and raw["type"] == "message":
+                last_event_time = now
+                try:
+                    event = json.loads(raw["data"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                else:
+                    cmd = event.get("command", "")
+                    status = event.get("status", "")
+                    duration_ms = event.get("duration_ms")
+                    duration = duration_ms / 1000 if duration_ms is not None else None
+
+                    if status == "running" and cmd:
+                        # Mark previous running command as done
+                        if commands and not commands[-1]["done"]:
+                            commands[-1]["done"] = True
+                        commands.append({"cmd": cmd, "done": False, "duration": None})
+                    elif status in ("completed", "failed") and cmd:
+                        # Find and update matching running command
+                        for i in range(len(commands) - 1, -1, -1):
+                            if commands[i]["cmd"] == cmd and not commands[i]["done"]:
+                                commands[i]["done"] = True
+                                commands[i]["duration"] = duration
+                                break
+                        else:
+                            commands.append({"cmd": cmd, "done": True, "duration": duration})
+
+                    # Keep last N (slice assign to preserve shared reference)
+                    if len(commands) > ACTIVITY_MAX_COMMANDS:
+                        commands[:] = commands[-ACTIVITY_MAX_COMMANDS:]
+                    pending_edit = True
+
+            # Check task state during idle — detect abort/completion early
+            idle_time = now - last_event_time
+            if r and idle_time > STATE_CHECK_INTERVAL and now - last_state_check > STATE_CHECK_INTERVAL:
+                last_state_check = now
+                try:
+                    state = await r.get(state_key)
+                    if state in ("completed", "failed", "aborted", "timed_out", "cancelled"):
+                        text = _format_activity(task_id, commands, done=True)
+                        try:
+                            await msg.edit_text(text)
+                        except Exception:
+                            pass
+                        return
+                except aioredis.RedisError:
+                    pass
+
+            # Idle timeout — task likely done
+            if idle_time > ACTIVITY_IDLE_TIMEOUT:
+                text = _format_activity(task_id, commands, done=True)
+                try:
+                    await msg.edit_text(text)
+                except Exception:
+                    pass
+                return
+
+            # Rate-limited edit
+            if pending_edit and now - last_edit_time >= ACTIVITY_EDIT_INTERVAL:
+                text = _format_activity(task_id, commands, done=False)
+                try:
+                    await msg.edit_text(text)
+                except Exception:
+                    pass
+                last_edit_time = now
+                pending_edit = False
+
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        logger.exception("Activity stream error for task %s", task_id[:8])
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+            await pubsub_redis.aclose()
+        except Exception:
+            pass
 
 
 async def _queue_task(
@@ -550,7 +724,7 @@ async def _queue_task(
         return
 
     task_id = str(uuid.uuid4())
-    task = json.dumps({
+    task_payload = json.dumps({
         "task_id": task_id,
         "message": message,
         "user_id": uid,
@@ -559,21 +733,21 @@ async def _queue_task(
         "model": _chat_model.get(chat_id, "opus"),
     })
 
-    await r.rpush(REDIS_TASKS_KEY, task)
-    pending_key = f"{REDIS_PENDING_PREFIX}{chat_id}"
-    await r.rpush(pending_key, task_id)
-    await r.expire(pending_key, TASK_TIMEOUT * 2)
+    await r.rpush(REDIS_TASKS_KEY, task_payload)
+    chat_tasks_key = _chat_tasks_key(chat_id)
+    await r.rpush(chat_tasks_key, task_id)
+    await r.expire(chat_tasks_key, TASK_TIMEOUT * 2)
     audit.info(
         "task_queued",
         extra={"user_id": uid, "task_id": task_id, "user_message": message},
     )
     logger.info("Task queued: %s (id=%s, model=%s)", message, task_id, _chat_model.get(chat_id, "opus"))
 
-    task = asyncio.create_task(
+    poll_task = asyncio.create_task(
         _poll_result(update, r, task_id, uid, user_message=message)
     )
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.add(poll_task)
+    poll_task.add_done_callback(_background_tasks.discard)
 
 
 @auth_required
@@ -589,73 +763,159 @@ async def _poll_result(
     update: Update, r: aioredis.Redis, task_id: str, uid: int,
     user_message: str = "",
 ) -> None:
-    """Poll Redis for a task result, send it back to the user."""
+    """Subscribe to task notify channel, with GET fallback every 10s."""
     chat_id = update.effective_chat.id
-    if _show_queue_msg.get(chat_id, True):
-        await update.message.reply_text(f"Queued task `{task_id[:8]}`...\nPolling for result...")
+    verbose = _verbose_mode.get(chat_id, True)
+    activity_msg = None
+    activity_task = None
+    activity_commands: list[dict] = []  # shared with _stream_activity
 
-    pending_key = f"{REDIS_PENDING_PREFIX}{chat_id}"
+    if verbose:
+        activity_msg = await update.message.reply_text(
+            _format_activity(task_id, [], done=False),
+        )
+        activity_task = asyncio.create_task(
+            _stream_activity(chat_id, task_id, activity_msg, activity_commands, r=r),
+        )
+        _background_tasks.add(activity_task)
+        activity_task.add_done_callback(_background_tasks.discard)
+
+    chat_tasks_key = _chat_tasks_key(chat_id)
     result_key = f"{REDIS_RESULT_PREFIX}{task_id}"
-    for i in range(TASK_TIMEOUT):
-        raw = await r.get(result_key)
-        if raw is not None:
-            await r.delete(result_key)
-            await r.lrem(pending_key, 1, task_id)
-            try:
-                result = json.loads(raw)
-                if not _verify_result(task_id, result):
-                    logger.warning("HMAC verification failed for task %s", task_id)
-                    audit.warning(
-                        "hmac_failed",
-                        extra={"task_id": task_id},
+    notify_channel = f"hcli:task:{task_id}:notify"
+
+    # Dedicated connection for result notification subscribe
+    notify_redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    pubsub = notify_redis.pubsub()
+    raw = None
+
+    try:
+        await pubsub.subscribe(notify_channel)
+
+        # Immediate GET check — covers race where result arrived before subscribe
+        try:
+            raw = await r.get(result_key)
+        except aioredis.RedisError as e:
+            logger.warning("Redis error on initial GET for task %s: %s", task_id[:8], e)
+
+        if raw is None:
+            # Wait for notification with fallback GET every NOTIFY_POLL_FALLBACK seconds
+            deadline = time.monotonic() + TASK_TIMEOUT
+            while raw is None and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                timeout = min(NOTIFY_POLL_FALLBACK, max(remaining, 0.1))
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=timeout,
+                )
+                # Whether notification arrived or timeout fired, check for result
+                try:
+                    raw = await r.get(result_key)
+                except aioredis.RedisError as e:
+                    logger.warning("Redis error polling task %s: %s", task_id[:8], e)
+
+                if raw is None and not verbose:
+                    await update.effective_chat.send_action("typing")
+
+        # Stop activity stream
+        if activity_task and not activity_task.done():
+            activity_task.cancel()
+
+        if raw is None:
+            # Timeout
+            if activity_msg:
+                try:
+                    await activity_msg.edit_text(
+                        _format_activity(task_id, activity_commands, done=True),
                     )
-                    output = "(error: result integrity check failed)"
-                else:
-                    output = result.get("output", "(no output)")
-                    usage = result.get("usage")
-                    if usage:
-                        in_t = usage.get("input_tokens", 0)
-                        out_t = usage.get("output_tokens", 0)
-                        cost = usage.get("cost_usd", 0)
-                        dur = usage.get("duration_ms", 0)
-                        dur_s = dur / 1000 if dur else 0
-                        mdl = usage.get("model", "?")
-                        stats = "{} ↑ {:,} ↓ {:,} | ${:.4f} | {:.1f}s".format(mdl, in_t, out_t, cost, dur_s)
-                        output = output + "\n\n<!-- stats:" + stats + " -->"
-            except json.JSONDecodeError:
-                output = "(error: malformed result)"
-
-            # Buffer teach turns if teach mode is active
-            teach_key = f"{TEACH_PREFIX}{chat_id}"
-            if await r.exists(teach_key):
-                turns_key = f"{TEACH_PREFIX}{chat_id}:turns"
-                if user_message:
-                    await r.rpush(turns_key, json.dumps(
-                        {"role": "user", "content": user_message}
-                    ))
-                await r.rpush(turns_key, json.dumps(
-                    {"role": "assistant", "content": output}
-                ))
-                await r.expire(turns_key, TEACH_TTL)
-
-            await send_long(update, output)
+                except Exception:
+                    pass
+            await update.message.reply_text(
+                f"Task {task_id[:8]} timed out after {TASK_TIMEOUT}s."
+            )
             audit.info(
-                "task_completed",
-                extra={"user_id": uid, "task_id": task_id},
+                "task_timeout",
+                extra={"user_id": uid, "task_id": task_id, "timeout": TASK_TIMEOUT},
             )
             return
-        if i % 5 == 0:
-            await update.effective_chat.send_action("typing")
-        await asyncio.sleep(POLL_INTERVAL)
 
-    await r.lrem(pending_key, 1, task_id)
-    await update.message.reply_text(
-        f"Task `{task_id[:8]}` timed out after {TASK_TIMEOUT}s."
-    )
-    audit.info(
-        "task_timeout",
-        extra={"user_id": uid, "task_id": task_id, "timeout": TASK_TIMEOUT},
-    )
+        # Got result — process it
+        if activity_msg:
+            try:
+                await activity_msg.edit_text(
+                    _format_activity(task_id, activity_commands, done=True),
+                )
+            except Exception:
+                pass
+
+        await r.delete(result_key)
+        await r.lrem(chat_tasks_key, 1, task_id)
+        try:
+            result = json.loads(raw)
+            if not _verify_result(task_id, result):
+                logger.warning("HMAC verification failed for task %s", task_id)
+                audit.warning(
+                    "hmac_failed",
+                    extra={"task_id": task_id},
+                )
+                output = "(error: result integrity check failed)"
+            else:
+                output = result.get("output", "(no output)")
+                usage = result.get("usage")
+                if usage:
+                    in_t = usage.get("input_tokens", 0)
+                    out_t = usage.get("output_tokens", 0)
+                    cost = usage.get("cost_usd", 0)
+                    dur = usage.get("duration_ms", 0)
+                    dur_s = dur / 1000 if dur else 0
+                    mdl = usage.get("model", "?")
+                    stats = "{} \u2191 {:,} \u2193 {:,} | ${:.4f} | {:.1f}s".format(mdl, in_t, out_t, cost, dur_s)
+                    output = output + "\n\n<!-- stats:" + stats + " -->"
+        except json.JSONDecodeError:
+            output = "(error: malformed result)"
+
+        # Buffer teach turns if teach mode is active
+        teach_key = f"{TEACH_PREFIX}{chat_id}"
+        if await r.exists(teach_key):
+            turns_key = f"{TEACH_PREFIX}{chat_id}:turns"
+            if user_message:
+                await r.rpush(turns_key, json.dumps(
+                    {"role": "user", "content": user_message}
+                ))
+            await r.rpush(turns_key, json.dumps(
+                {"role": "assistant", "content": output}
+            ))
+            await r.expire(turns_key, TEACH_TTL)
+
+        await send_long(update, output)
+        audit.info(
+            "task_completed",
+            extra={"user_id": uid, "task_id": task_id},
+        )
+
+    except asyncio.CancelledError:
+        return
+    except aioredis.RedisError as e:
+        logger.error("Redis error waiting for task %s: %s", task_id[:8], e)
+        await update.message.reply_text(
+            f"Lost connection to backend while waiting for task {task_id[:8]}."
+        )
+        audit.warning(
+            "task_redis_error",
+            extra={"user_id": uid, "task_id": task_id},
+        )
+    finally:
+        if activity_task and not activity_task.done():
+            activity_task.cancel()
+        try:
+            await pubsub.unsubscribe(notify_channel)
+            await pubsub.close()
+            await notify_redis.aclose()
+        except Exception:
+            pass
+        try:
+            await r.lrem(chat_tasks_key, 1, task_id)
+        except aioredis.RedisError:
+            pass
 
 
 @auth_required
@@ -683,12 +943,12 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
     elif text == "📚 Skills":
         await cmd_skills(update, context)
         return
-    elif text == "🔕 Queue Msg":
-        current = _show_queue_msg.get(chat_id, True)
-        _show_queue_msg[chat_id] = not current
+    elif text == "📡 Verbose":
+        current = _verbose_mode.get(chat_id, True)
+        _verbose_mode[chat_id] = not current
         state = "ON" if not current else "OFF"
         await update.message.reply_text(
-            f"Queue messages: {state}",
+            f"Verbose mode: {state}",
             reply_markup=_model_keyboard(),
         )
         return
@@ -727,16 +987,34 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
             session_lines.append(f"{role}: {content}")
         session_text = "\n\n".join(session_lines)
 
+        MAX_TEACH_BYTES = 100_000
+        if len(session_text) > MAX_TEACH_BYTES:
+            logger.warning(
+                "Teach session truncated: %d bytes -> %d bytes (chat %s)",
+                len(session_text), MAX_TEACH_BYTES, chat_id,
+            )
+            session_text = session_text[-MAX_TEACH_BYTES:]
+
         prompt = (
-            "Generate a skill file from this teaching session. Write it to "
-            "/tmp/skills/{topic}.md using run_command. Choose an appropriate "
-            "{topic} name based on the content. "
-            "Use the YAML keywords header format:\n"
+            "You are extracting a reusable skill from a teaching session.\n\n"
+            "RULES:\n"
+            "- Extract the principle, not the instance. Generalize examples into rules.\n"
+            "- Only write a rule if it was demonstrated or explicitly stated. No inferences.\n"
+            "- Most skills involve: REST API calls, terminal commands, Playwright automation, or VNC sequences.\n"
+            "- Keep it concise. One skill file, focused on one topic.\n\n"
+            "OUTPUT FORMAT — show the full draft in your reply, do NOT write it to disk yet. Ask the user if they want to save it. If they say yes, write it to /tmp/skills/{topic}.md using run_command. If no, discard it.\n"
             "---\n"
-            "keywords: word1, word2, ...\n"
+            "keywords: (trigger words that should activate this skill)\n"
             "---\n"
-            "# Topic\n"
-            "...organized content...\n\n"
+            "# {Topic}\n\n"
+            "## Trigger\n"
+            "When does this skill activate? What\'s in scope, what\'s not?\n\n"
+            "## Constraints\n"
+            "Hard rules, non-negotiable.\n\n"
+            "## Procedure\n"
+            "Ordered steps with actual commands/API calls.\n\n"
+            "## Anti-patterns\n"
+            "What NOT to do. Exceptions to the rules.\n\n"
             f"Teaching session:\n{session_text}"
         )
 
@@ -760,6 +1038,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _queue_task(update, context, message)
 
 
+@auth_required
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle photo messages — download, base64 encode, queue with data URI."""
+    photo = update.message.photo[-1]  # highest resolution
+    file = await context.bot.get_file(photo.file_id)
+    photo_bytes = await file.download_as_bytearray()
+
+    # Save original photo to disk for training pipeline (best-effort)
+    try:
+        media_dir = Path(f"/var/log/hcli/media/{update.effective_chat.id}")
+        media_dir.mkdir(parents=True, exist_ok=True)
+        media_path = media_dir / f"{int(time.time())}_{photo.file_id[:8]}.jpg"
+        with open(media_path, "wb") as f:
+            f.write(bytes(photo_bytes))
+    except OSError as e:
+        logger.warning("Failed to save photo to disk: %s", e)
+
+    b64 = base64.b64encode(bytes(photo_bytes)).decode()
+
+    caption = (update.message.caption or "").strip()
+    if caption:
+        message = f"{caption}\n\ndata:image/jpeg;base64,{b64}"
+    else:
+        message = f"The user sent this image.\n\ndata:image/jpeg;base64,{b64}"
+
+    await _queue_task(update, context, message)
+
+
+@auth_required
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle location messages — extract coordinates, queue as text."""
+    loc = update.message.location
+    message = f"User shared a location: latitude {loc.latitude}, longitude {loc.longitude}"
+
+    if update.message.venue:
+        venue = update.message.venue
+        message = f"User shared a location: {venue.title} ({venue.address}) — latitude {loc.latitude}, longitude {loc.longitude}"
+
+    await _queue_task(update, context, message)
+
+
 # ── App lifecycle ────────────────────────────────────────────────────────
 async def post_init(application: Application) -> None:
     pool = aioredis.ConnectionPool.from_url(
@@ -769,6 +1088,16 @@ async def post_init(application: Application) -> None:
     application.bot_data["redis"] = aioredis.Redis(connection_pool=pool)
     application.bot_data["redis_pool"] = pool
     logger.info("Redis connection pool created (%s)", REDIS_URL.split("@")[-1])
+    await application.bot.set_my_commands([
+        BotCommand("start", "Initialize bot and show keyboard"),
+        BotCommand("help", "Show available commands"),
+        BotCommand("new", "Clear context, start fresh conversation"),
+        BotCommand("run", "Execute a shell command directly"),
+        BotCommand("cancel", "Cancel the last queued task"),
+        BotCommand("abort", "Kill the currently running task"),
+        BotCommand("status", "Show task queue depth"),
+        BotCommand("stats", "Today's usage stats"),
+    ])
     logger.info(
         "Bot started — allowed chats: %s, max tasks: %d, timeout: %ds",
         ALLOWED_CHATS or "(none)",
@@ -800,15 +1129,18 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("abort", cmd_abort))
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"^(⚡ Fast|🧠 Deep|📊 Stats|📚 Skills|📝 Teach|📖 End Teaching|🔕 Queue Msg)$"),
+        filters.TEXT & filters.Regex(r"^(⚡ Fast|🧠 Deep|📊 Stats|📚 Skills|📝 Teach|📖 End Teaching|📡 Verbose)$"),
         handle_keyboard_button,
     ))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Starting Telegram bot polling...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=["message"])
 
 
 if __name__ == "__main__":

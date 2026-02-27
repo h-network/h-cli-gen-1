@@ -14,23 +14,18 @@
 | Platform support | DONE | Docker everywhere (ARM, x86, any cloud) |
 | Olivaw Learning | DONE | Skill files, selective loading, interactive teaching, action system |
 | Branch cleanup | DONE | Single main branch, Gitea + GitHub remotes |
+| CVE pattern checker | DONE | Containerized NVD scanner, batched analysis, configurable model |
+| Offline model support | DONE | Ollama/vLLM via ANTHROPIC_BASE_URL, configurable model mapping |
+| OAuth auth | DONE | CLAUDE_CODE_OAUTH_TOKEN env var, no credential volumes |
+| Monitor stack | DONE | TimescaleDB + Grafana + usage metrics, /stats command |
+| Telegram actions | DONE | Graph rendering, skill buttons, queue toggle |
 
 ## Planned
 
-### CVE Auto-Population
-- Weekly interactive `cve-update` command
-- Fresh Claude instance (clean room, no h-cli context)
-- Reviews NVD/GitHub Advisory for tools in sudo whitelist
-- Proposes patterns, user approves, writes to blocked_patterns.txt
-- Priority: HIGH (before next public release)
-
 ### Model Provider Routing
-- Ollama / vLLM support for local GPU inference
-- `MODEL_PROVIDER` env var: claude, ollama, vllm, auto
-- Auto mode: route sensitive queries to local, complex to cloud
-- Context layer is provider-agnostic (plain text in, plain text out)
-- Swap one function in dispatcher, everything else untouched
-- Priority: LOW (waiting on GPU hardware)
+- Offline inference works (Ollama/vLLM via ANTHROPIC_BASE_URL)
+- Remaining: auto mode — route sensitive queries to local, complex to cloud
+- Priority: LOW
 
 ### Additional Channels
 - Discord adapter (discord.py, same Redis pattern)
@@ -87,7 +82,7 @@ Channels                  20+ built-in             1 (Telegram) + arch ready
                           Monolithic gateway       Container-per-channel
                           Shared plugin deps       Independent adapters on Redis
 
-Model providers           20+ providers            1 (Claude) + easy to add
+Model providers           20+ providers            Claude + Ollama/vLLM
                           Auth profile rotation    Provider-agnostic context layer
                           Failover chains          Swap one function
 
@@ -96,7 +91,7 @@ Platform support          Per-OS install paths     docker compose up -d
                           LaunchAgent / systemd    Docker handles supervision
 
 Security posture          Patched by upstream dev   Operator-controlled
-                          Wait for disclosure       CVE auto-population (planned)
+                          Wait for disclosure       CVE auto-population (built)
                           135k exposed instances    Pattern denylist updated weekly
                           Critical RCE (2026)       No web UI, no exposed ports
 ```

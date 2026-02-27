@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import re
+import time as _time
 from datetime import datetime, timezone
 
 import redis
@@ -114,6 +115,7 @@ def _get_redis():
 
 def _write_gate_metrics(input_tokens: int, output_tokens: int, cost_usd: float, duration_ms: int):
     """Bump Redis counters for gatekeeper usage."""
+    global _redis_client
     r = _get_redis()
     if r is None:
         return
@@ -127,6 +129,9 @@ def _write_gate_metrics(input_tokens: int, output_tokens: int, cost_usd: float, 
         pipe.hincrby(date_key, "gate_duration_ms", duration_ms)
         pipe.expire(date_key, STATS_TTL)
         pipe.execute()
+    except redis.RedisError as e:
+        logger.warning("Redis error in gate metrics, will reconnect: %s", e)
+        _redis_client = None
     except Exception as e:
         logger.warning("Failed to write gate metrics: %s", e)
 
@@ -270,12 +275,16 @@ async def _gate_check(command: str) -> tuple[bool, str]:
 
 async def _forward_to_core(command: str) -> str:
     """Forward approved command to core's MCP server via SSE."""
+    task_id = os.environ.get("TASK_ID", "")
     try:
         async with sse_client(CORE_SSE_URL) as streams:
             async with ClientSession(*streams) as session:
                 await session.initialize()
+                args = {"command": command}
+                if task_id:
+                    args["task_id"] = task_id
                 result = await asyncio.wait_for(
-                    session.call_tool("run_command", {"command": command}),
+                    session.call_tool("run_command", args),
                     timeout=240,
                 )
                 texts = []
@@ -299,7 +308,6 @@ async def run_command(command: str) -> str:
     curl, wget, ssh, ping, iproute2, netcat, Playwright/Chromium.
     Returns combined stdout+stderr and exit code.
     """
-    import time as _time
     t0 = _time.monotonic()
     logger.info("Command received: %s (gate=%s)", command, GATE_CHECK)
 

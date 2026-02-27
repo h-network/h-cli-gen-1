@@ -55,6 +55,7 @@ async def memory_search(query: str, limit: int = 5) -> str:
         query: Natural language search query.
         limit: Maximum number of results (default 5, max 20).
     """
+    limit = max(1, min(limit, 20))
     return await _forward_to_memory(query, limit)
 
 

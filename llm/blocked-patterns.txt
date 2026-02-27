@@ -8,7 +8,9 @@
 
 # ── Shell piping to interpreters ─────────────────────────────────
 | bash
-| sh
+| sh -
+| sh;
+| sh |
 | zsh
 | dash
 | ash

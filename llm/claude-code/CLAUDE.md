@@ -25,18 +25,14 @@ If no results are found, fall back to session chunks.
 
 ## Skills
 
-Skills are keyword-matched knowledge files automatically injected into
-your system prompt when the user's message matches. You don't need to
-load them -- the dispatcher handles it. Skills live in `/app/skills/public/`
-and `/app/skills/private/`.
+Your available skills are listed under "Available skills" in your context.
+Before executing any command, check if a relevant skill exists in that list.
+If it does, `cat` the file path and follow its rules before proceeding.
 
-## Session Chunking
+## Recalling Past Conversations
 
-Sessions are automatically chunked when conversation size exceeds 100KB.
+When the user references something from an earlier conversation:
 
-When a session is chunked:
-- The previous conversation is saved to `/var/log/hcli/sessions/{chat_id}/chunk_{timestamp}.txt`
-- Your current session starts fresh with a context note referencing the chunk file
-- If the user references something from earlier that you don't have context for,
-  read chunk files from `/var/log/hcli/sessions/{chat_id}/`
-- Multiple chunks may exist -- read the most recent one first, or all of them if needed
+1. **Always `memory_search` first.** It covers curated Q&A from all past sessions.
+2. **Only if memory_search returns nothing**, fall back to chunk grep:
+   `grep -li -E "keyword1|keyword2" /var/log/hcli/sessions/{chat_id}/*.txt` → `cat` matching files → answer.
