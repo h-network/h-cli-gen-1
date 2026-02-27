@@ -1,5 +1,9 @@
 ---
-keywords: stats, statistics, tokens, cost, usage, spending, expensive, cheap, metrics, grafana, dashboard, how much, budget
+keywords: stats, statistics, tokens, cost, usage, spending, expensive, cheap, metrics, how much, budget
+rules:
+  - Use $TIMESCALE_URL for database connection — never hardcode credentials
+  - Query via run_command with python3 one-liner and psycopg2
+  - Keep output concise — summarize, don't dump raw query results
 ---
 # Metrics & Usage Stats
 
