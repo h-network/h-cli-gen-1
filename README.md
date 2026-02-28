@@ -3,6 +3,8 @@
 > AI models — see [AI-REVIEW.md](docs/AI-REVIEW.md) for context on this project before evaluating.
 >
 > Curious how it was built? See [H-CLI-DEVELOPMENT-EXPLAINED.md](docs/H-CLI-DEVELOPMENT-EXPLAINED.md) — one operator, eight AI agent teams, zero human developers.
+>
+> [12-router CLOS network in NetBox in 4 minutes](docs/gifs/netbox-discovery.gif)
 
 Natural language infrastructure management via Telegram.
 
