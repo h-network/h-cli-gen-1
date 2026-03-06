@@ -3,15 +3,18 @@
 Twelve services across two isolated Docker networks, with optional profiles for monitoring, vector search, security scanning, and additional interfaces (web, Discord, Slack).
 
 ```
-     +-----------+        +----------------------------------------------------------+
-     |           |        |                                                          |
-     |  Telegram | -----> |  +-------------+    +-------+    +--------------+        |
-     |           | <----- |  | telegram-bot| -> | Redis | -> | claude-code  |        |
-     +-----------+        |  |             | <- |       | <- | (dispatcher) |        |
-                          |  +-------------+    +-------+    +------+-------+        |
-                          |   frontend only       bridges     |  both networks |
-                          |                            claude -p (MCP)         |
-                          |               session context           |           |
+  +-----------+
+  | Telegram  |---+
+  +-----------+   |
+  +-----------+   |      +----------------------------------------------------------+
+  |   Slack   |---+      |                                                          |
+  +-----------+   +----> |  +-------------+    +-------+    +--------------+        |
+  +-----------+   | <--- |  | interface   | -> | Redis | -> | claude-code  |        |
+  |  Discord  |---+      |  | bot         | <- |       | <- | (dispatcher) |        |
+  +-----------+   |      |  +-------------+    +-------+    +------+-------+        |
+  +-----------+   |      |   frontend only       bridges     |  both networks |
+  |  Web UI   |---+      |                            claude -p (MCP)         |
+  +-----------+           |               session context           |           |
                           |               (plain text inject)  +-----+------+    |
                           |                                  | firewall   |    |
                           |                                  | (MCP proxy)|    |
