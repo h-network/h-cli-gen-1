@@ -72,8 +72,10 @@ TEACH_TTL = 3600              # 1h auto-expire if user forgets
 _verbose_mode: dict[int, bool] = {}  # per-chat verbose toggle (default ON)
 ACTIVITY_IDLE_TIMEOUT = 30   # seconds with no events before auto-unsubscribe
 ACTIVITY_MAX_COMMANDS = 8    # max commands shown in activity message
-ACTIVITY_CMD_MAX_LEN = 60    # truncate commands longer than this
+ACTIVITY_CMD_MAX_LEN = int(os.environ.get("ACTIVITY_CMD_MAX_LEN", "150"))
 ACTIVITY_EDIT_INTERVAL = 1   # min seconds between Telegram message edits
+LONG_RUNNING_THRESHOLD = 30  # seconds before showing elapsed time
+LONG_RUNNING_UPDATE_INTERVAL = 10  # seconds between elapsed time updates
 
 _CHAT_NAMES = {}
 for _pair in os.environ.get("CHAT_NAMES", "").split(","):
@@ -584,6 +586,7 @@ def _format_activity(task_id: str, commands: list[dict], done: bool) -> str:
     if not commands:
         return header + ("\n\nDone \u2014 no commands captured." if done else "")
     lines = [header, ""]
+    now = time.monotonic()
     for entry in commands:
         cmd = entry["cmd"]
         if len(cmd) > ACTIVITY_CMD_MAX_LEN:
@@ -593,7 +596,12 @@ def _format_activity(task_id: str, commands: list[dict], done: bool) -> str:
             dur = f" {entry['duration']:.1f}s" if entry.get("duration") is not None else ""
             lines.append(f"\u2713{dur}")
         else:
-            lines.append("\u23f3 running...")
+            started_at = entry.get("started_at")
+            if started_at and (now - started_at) >= LONG_RUNNING_THRESHOLD:
+                elapsed = int(now - started_at)
+                lines.append(f"\u23f3 still running ({elapsed}s)")
+            else:
+                lines.append("\u23f3 running...")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -644,7 +652,7 @@ async def _stream_activity(
                         # Mark previous running command as done
                         if commands and not commands[-1]["done"]:
                             commands[-1]["done"] = True
-                        commands.append({"cmd": cmd, "done": False, "duration": None})
+                        commands.append({"cmd": cmd, "done": False, "duration": None, "started_at": now})
                     elif status in ("completed", "failed") and cmd:
                         # Find and update matching running command
                         for i in range(len(commands) - 1, -1, -1):
@@ -659,6 +667,14 @@ async def _stream_activity(
                     if len(commands) > ACTIVITY_MAX_COMMANDS:
                         commands[:] = commands[-ACTIVITY_MAX_COMMANDS:]
                     pending_edit = True
+
+            # Long-running command updates — show elapsed every 10s after 30s
+            has_long_running = any(
+                not e["done"] and e.get("started_at") and (now - e["started_at"]) >= LONG_RUNNING_THRESHOLD
+                for e in commands
+            )
+            if has_long_running and now - last_edit_time >= LONG_RUNNING_UPDATE_INTERVAL:
+                pending_edit = True
 
             # Check task state during idle — detect abort/completion early
             idle_time = now - last_event_time
@@ -676,8 +692,9 @@ async def _stream_activity(
                 except aioredis.RedisError:
                     pass
 
-            # Idle timeout — task likely done
-            if idle_time > ACTIVITY_IDLE_TIMEOUT:
+            # Idle timeout — task likely done (but not while commands are still running)
+            has_active = any(not e["done"] for e in commands)
+            if idle_time > ACTIVITY_IDLE_TIMEOUT and not has_active:
                 text = _format_activity(task_id, commands, done=True)
                 try:
                     await msg.edit_text(text)
@@ -731,6 +748,7 @@ async def _queue_task(
         "chat_id": chat_id,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "model": _chat_model.get(chat_id, "opus"),
+        "source": "telegram",
     })
 
     await r.rpush(REDIS_TASKS_KEY, task_payload)
