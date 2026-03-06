@@ -1,11 +1,13 @@
 <p align="center">
-  <img src="docs/gifs/h-cli-mascot.png" width="300" alt="h-cli mascot">
+  <img src="docs/gifs/h-cli-mascot.png" width="400" alt="h-cli mascot">
 </p>
 
 <h1 align="center">h-cli</h1>
 
 <p align="center">
   <strong>Natural language infrastructure management. Self-hosted. Self-learning.</strong>
+  <br>
+  <em>Uses <a href="https://parrotsec.org">ParrotOS</a> as the MCP server for full power.</em>
 </p>
 
 <p align="center">
