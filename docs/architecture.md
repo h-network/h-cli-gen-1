@@ -25,7 +25,7 @@ Twelve services across two isolated Docker networks, with optional profiles for 
                           +----------------------------------------------------------+
 ```
 
-**Flow**: User sends message in Telegram → telegram-bot queues to Redis → dispatcher invokes Claude Code with session context → Claude calls `run_command()` → Asimov firewall checks the command (pattern denylist + independent Haiku gate) → core executes → result signed with HMAC → delivered back to Telegram.
+**Flow**: User sends message via any interface (Telegram, Slack, Discord, or Web UI) → interface bot queues to Redis → concurrent dispatcher invokes Claude Code with session context → Claude calls `run_command()` → Asimov firewall checks the command (pattern denylist + independent LLM gate) → core executes → result signed with HMAC → delivered back to the originating interface.
 
 Session history is stored in Redis lists. Session chunks are written as plain text files. JSONL files are written automatically by Claude Code CLI as an audit trail but are never replayed into the context window.
 
