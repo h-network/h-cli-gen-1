@@ -143,7 +143,7 @@ class JunosTransport(BaseTransport):
             except (ConfigLoadError, CommitError) as e:
                 cu.rollback()
                 cu.unlock()
-                return EditResult(ok=False, diff=diff if 'diff' in dir() else None,
+                return EditResult(ok=False, diff=diff if 'diff' in locals() else None,
                                   error=str(e))
             except Exception as e:
                 try:

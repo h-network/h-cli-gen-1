@@ -69,7 +69,7 @@ class TelnetTransport(BaseTransport):
 
         # Handle login sequence if prompted
         if LOGIN_RE.search(initial):
-            self._send(user + "\n")
+            self._send((user or "") + "\n")
             resp = self._read_until_prompt_or_login(timeout=timeout)
             if PASSWORD_RE.search(resp):
                 self._send((password or "") + "\n")

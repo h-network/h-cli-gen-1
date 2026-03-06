@@ -4,22 +4,22 @@
 
 ## What it does
 
-A Telegram bot backed by Claude Code that executes network/sysadmin commands in a hardened ParrotOS container. You type "scan 192.168.1.1" — it runs nmap and returns results. Maintains conversation context for 4 hours with automatic chunking at 100KB so it understands "that host" and "same scan again."
+A messaging bot backed by Claude Code that executes network/sysadmin commands in a hardened container. You type "scan 192.168.1.1" — it runs nmap and returns results. Maintains conversation context for 4 hours with automatic chunking at 100KB so it understands "that host" and "same scan again." Supports Telegram, Discord, Slack, and a web UI.
 
 ## Architecture
 
-Four containers, two isolated Docker networks:
+Up to twelve services, two isolated Docker networks:
 
-- **telegram-bot** — user interface, auth gatekeeper
+- **Interface bots** — Telegram, Discord, Slack, Web UI (each an independent container, profile-selectable)
 - **Redis** — message queue + session storage
 - **claude-code** — dispatcher + Asimov firewall (MCP proxy), bridges both networks
-- **core** — ParrotOS toolbox with MCP server, only network that can execute commands
+- **core** — toolbox with MCP server (default: Debian 12, optional: ParrotOS), backend-only
 
 Every `run_command()` call passes through the Asimov firewall before reaching core.
 
 ## Security posture
 
-Production-hardened. 44 security items implemented:
+Production-hardened. 45 security items implemented:
 
 - Network-isolated frontend/backend
 - Fail-closed allowlisting (Telegram chat IDs, sudo commands)
@@ -39,4 +39,4 @@ Part of the **h-ecosystem** for self-improving AI. Every conversation, command, 
 
 ## Status
 
-Deployed and running. Security hardening complete (44 items), 1 deferred finding (F34 — Playwright sandbox, Docker provides outer sandbox), Asimov firewall active with HMAC-signed results.
+Deployed and running. Security hardening complete (45 items), Asimov firewall active with HMAC-signed results.

@@ -9,12 +9,15 @@ The skills module is a collection of keyword-tagged Markdown files that inject d
 ```
 skills/
 ├── README.md                      # Format specification (never injected)
-├── Team_instructions.md           # Knowledge team governance
 ├── LLD.md                         # This document
-├── BACKLOG.md                     # Skills backlog (K-1, K-2, K-4)
 ├── public/                        # Shared skills — tracked in git
+│   ├── eve-ng.md                  # EVE-NG lab automation
+│   ├── hssh-edit.md               # h-ssh config deployment (safety-critical)
+│   ├── hssh-show.md               # h-ssh show commands (SSH, telnet, REST)
+│   ├── hssh-troubleshoot.md       # h-ssh troubleshooting workflows
 │   ├── stats.md                   # Token usage & cost queries
-│   └── telegram-actions.md        # Rich Telegram responses (Grafana graphs)
+│   ├── telegram-actions.md        # Rich Telegram responses (Grafana graphs)
+│   └── tmux-interaction.md        # tmux pane sessions & parallel bootstrap
 └── private/                       # Deployment-specific — gitignored
     └── .gitkeep                   # Preserves directory in git
 ```
@@ -150,7 +153,7 @@ Runtime-generated skills (from teach mode or manual creation) live here. They fo
 
 Reference: Architect LLD section 3 — end-to-end message lifecycle.
 
-Skills are loaded between **Step 4** (context injection) and **Step 5** (Claude invocation). The dispatcher builds the system prompt and calls `_load_matching_skills(message)` to inject our content:
+Skills are loaded between **Step 4** (context injection) and **Step 5** (Claude invocation). The dispatcher builds the system prompt and calls `_load_matching_skills(message)` in `worker.py` to inject our content:
 
 ```
 Step 3: Dispatcher picks up task from Redis
@@ -165,23 +168,26 @@ Step 4: Context injection (Redis history → user message, session chunks → sy
    │    and  /app/skills/private/*.md                │
    │ 3. Parse YAML frontmatter per file              │
    │ 4. keyword ∩ msg_words ≠ ∅ → match              │
-   │ 5. Concatenate matched content (sorted order)   │
-   │ 6. Enforce 20 KB cap                            │
+   │ 5. Inject RULES from matched skill headers      │
+   │ 6. Append full skill index (all skill paths)    │
+   │ 7. Enforce 20 KB cap on rules content           │
    └───┬─────────────────────────────────────────────┘
        │
        ▼
-   System prompt = groundRules.md + context.md + session chunks + MATCHED SKILLS
+   System prompt = groundRules.md + context.md + session chunks + SKILL RULES + SKILL INDEX
        │
 Step 5: claude -p --session-id {uuid} -- {message_with_history}
        │
 Step 6–9: Firewall → Core → Result signing → Telegram delivery
 ```
 
+**Tiered injection model:** Only the `rules:` entries from matched skill YAML headers are injected into the prompt — not the full skill body. A full skill index (all skill names and file paths) is always appended so the model knows what skills exist. This keeps prompt size minimal while giving the model actionable constraints.
+
 **What we receive:** The user's raw message text (for keyword matching only — we never see chat_id, task_id, or session state).
 
-**What we hand off:** Concatenated markdown content of all matched skills, capped at 20 KB, injected into the system prompt as a `## Relevant Skills` section.
+**What we hand off:** Rules from matched skill headers + a full skill index, capped at 20 KB, injected into the system prompt as a `## Skills` section.
 
-**What we don't control:** The matching algorithm, the injection order within the prompt, the budget enforcement logic — all owned by Orchestration in `dispatcher.py`.
+**What we don't control:** The matching algorithm, the injection order within the prompt, the budget enforcement logic — all owned by Orchestration in `worker.py`.
 
 ---
 

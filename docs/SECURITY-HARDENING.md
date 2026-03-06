@@ -30,7 +30,7 @@ Prevents privilege escalation via setuid binaries.
 Telegram-bot runs with `read_only: true`. Writable paths limited to `tmpfs` mounts (`/tmp`, `/run`) and bind-mounted log directories. Claude-code traded read-only for non-root user (see item 39).
 
 ### 8. Health checks on all services
-All nine services have Docker healthcheck stanzas: Core checks MCP SSE endpoint via curl (exit code 0 or 28), Redis via `redis-cli ping`, telegram-bot and claude-code verify Redis connectivity via Python, Grafana via `curl /api/health`, TimescaleDB via `pg_isready`, Qdrant and Grafana Renderer via bash `/dev/tcp` (curl not available in those images), CVE checker via `pgrep`.
+All services have Docker healthcheck stanzas: Core checks MCP SSE endpoint via curl (exit code 0 or 28), Redis via `redis-cli ping`, telegram-bot and claude-code verify Redis connectivity via Python, Grafana via `curl /api/health`, TimescaleDB via `pg_isready`, Qdrant and Grafana Renderer via bash `/dev/tcp` (curl not available in those images), CVE checker via `pgrep`.
 
 ### 9. Graceful shutdown (SIGTERM)
 Dispatcher registers a SIGTERM handler. On `docker stop`, it finishes the current task before exiting. BLPOP uses `timeout=30` so the shutdown flag is checked every 30 seconds.

@@ -28,13 +28,12 @@
 - Priority: LOW
 
 ### Additional Channels
-- Discord adapter (discord.py, same Redis pattern)
-- Slack adapter (slack_bolt, webhook mode)
-- WebChat (FastAPI + WebSocket)
-- Signal bridge (signal-cli)
-- Matrix (matrix-nio, self-hosted friendly)
+- Discord adapter — DONE (discord.py, profile: discord)
+- Slack adapter — DONE (slack_bolt, Socket Mode, profile: slack)
+- Web UI — DONE (FastAPI + WebSocket, profile: web, SSL support)
+- Signal bridge (signal-cli) — planned
+- Matrix (matrix-nio, self-hosted friendly) — planned
 - Architecture ready: each channel = independent container on Redis bus
-- Priority: LOW
 
 ### Lambda Training Pipeline
 - Orchestrate GPU training on Lambda Labs from Telegram
@@ -78,7 +77,7 @@ Multi-user                Device pairing           Chat ID keying (built in)
                           Challenge-nonce auth     Already separated in Redis
                           Scope config policies    Sessions, history, chunks per user
 
-Channels                  20+ built-in             1 (Telegram) + arch ready
+Channels                  20+ built-in             4 (Telegram, Discord, Slack, Web)
                           Monolithic gateway       Container-per-channel
                           Shared plugin deps       Independent adapters on Redis
 

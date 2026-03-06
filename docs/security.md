@@ -1,6 +1,6 @@
 # Security
 
-44 security items implemented. Full audit trail: [SECURITY-HARDENING.md](SECURITY-HARDENING.md)
+45 security items implemented. Full audit trail: [SECURITY-HARDENING.md](SECURITY-HARDENING.md)
 
 ## Ground Rules: A TCP/IP Model for AI Safety
 
@@ -34,7 +34,7 @@ The layered model eliminates ambiguity: **lower layers always win.** If a user a
 
 The ground rules are loaded into two independent systems:
 
-1. **Sonnet's system prompt** — behavioral guidance. The agent can discuss the rules, reference them, reason about them. But testing proved it will not reliably enforce them on its own. (See [test case: gate vs prompt enforcement](test-cases/gate-vs-prompt-enforcement.md))
+1. **The main model's system prompt** — behavioral guidance. The agent can discuss the rules, reference them, reason about them. But testing proved it will not reliably enforce them on its own. (See [test case: gate vs prompt enforcement](test-cases/gate-vs-prompt-enforcement.md))
 
 2. **Haiku's gate prompt** — actual enforcement. Stateless, no conversation context, no memory. Sees only the ground rules and the raw command. The layered structure gives the gate a clear decision framework: identify which layer the command touches, check if it violates that layer or any layer below it.
 
@@ -66,6 +66,9 @@ The system prompt is documentation. The gate is enforcement. The layered model m
 | `timescaledb` | `postgres` (default) | Default | Writable | backend only |
 | `grafana-renderer` | `node` (default) | Default | Writable | backend only |
 | `qdrant` | `qdrant` (default) | Default | Writable | backend only |
+| `web-ui` | `hcli` (1000) | None (`cap_drop: ALL`) | Read-only | frontend only |
+| `discord-bot` | `hcli` (1000) | None (`cap_drop: ALL`) | Read-only | frontend only |
+| `slack-bot` | `hcli` (1000) | None (`cap_drop: ALL`) | Read-only | frontend only |
 | `cve-check` | `hcli` (1000) | None (`cap_drop: ALL`) | Writable | frontend only |
 
 ## Data Access
