@@ -112,7 +112,7 @@ def load_jobs(path: str) -> tuple[list[Device], dict[str, str], dict[str, str], 
 
     Job file format — JSON array of objects:
     [
-      {"target": "R1:192.168.178.120:junos", "show": "show bgp summary"},
+      {"target": "R1:198.51.100.1:junos", "show": "show bgp summary"},
       {"target": "netbox:https://netbox.example.com:rest", "show": "/api/dcim/devices/",
        "auth": {"scheme": "bearer", "token": "nbt_abc.xyz"}}
     ]

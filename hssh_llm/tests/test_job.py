@@ -9,8 +9,8 @@ import pytest
 HSSH = os.path.join(os.path.dirname(__file__), "..", "h-ssh", "h-ssh.py")
 CWD = os.path.join(os.path.dirname(__file__), "..", "h-ssh")
 
-R1 = "R1:192.168.178.120:junos"
-R2 = "R2:192.168.178.108:junos"
+R1 = "R1:198.51.100.1:junos"
+R2 = "R2:198.51.100.2:junos"
 
 
 def run_job_stdin(job: list[dict], extra_args: list[str] | None = None) -> subprocess.CompletedProcess:

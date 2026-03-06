@@ -250,7 +250,7 @@ def test_target_4_part_format(ios_server):
 def test_mixed_ssh_telnet_job(ios_server):
     """Mixed job with SSH and telnet targets."""
     job = [
-        {"target": "R1:192.168.178.120:junos", "show": "show system uptime"},
+        {"target": "R1:198.51.100.1:junos", "show": "show system uptime"},
         {"target": f"SW1:127.0.0.1:{ios_server.port}:telnet-ios", "show": "show version"},
     ]
     r = run_job_stdin(job)

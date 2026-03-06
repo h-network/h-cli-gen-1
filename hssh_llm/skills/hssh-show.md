@@ -21,7 +21,7 @@ h-ssh.py -sC "show interfaces terse" \
   --json -y
 
 # Custom SSH port via target
-h-ssh.py -sC "show version" --target SRV1:h-srv:8023:ssh --json -y
+h-ssh.py -sC "show version" --target SRV1:server1.example.com:8023:ssh --json -y
 
 # Command shortcuts (bgp, ospf, interfaces, routes, lldp)
 h-ssh.py -sC bgp --target CR1:10.0.1.1 --json -y

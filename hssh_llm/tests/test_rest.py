@@ -259,7 +259,7 @@ def test_rest_edit_invalid_payload(mock_server):
 def test_mixed_ssh_rest_job(mock_server):
     """Mixed job with SSH and REST targets in one run."""
     job = [
-        {"target": "R1:192.168.178.120:junos", "show": "show system uptime"},
+        {"target": "R1:198.51.100.1:junos", "show": "show system uptime"},
         {"target": f"nb:{mock_server}:rest", "show": "/api/devices/",
          "auth": {"scheme": "bearer", "token": "test"}},
     ]

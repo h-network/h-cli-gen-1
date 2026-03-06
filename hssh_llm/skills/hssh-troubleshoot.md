@@ -29,7 +29,7 @@ h-ssh.py -sC routes --target R1:10.0.1.1 --json -y
 
 **Device on non-standard SSH port:**
 ```bash
-h-ssh.py -sC "show version" --target SRV1:h-srv:8023:ssh --json -y
+h-ssh.py -sC "show version" --target SRV1:server1.example.com:8023:ssh --json -y
 ```
 
 ## Iterative Workflow
