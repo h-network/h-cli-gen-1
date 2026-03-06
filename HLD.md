@@ -2,7 +2,7 @@
 
 ## 1. What It Is
 
-h-cli is an AI-powered engineering assistant accessed via messaging interfaces. Users send natural language requests, the system routes them through a security firewall, executes commands on infrastructure, and returns results.
+h-cli is an AI-powered engineering assistant accessed via messaging interfaces. Users send natural language requests through Telegram, Slack, Discord, or a lightweight web UI. The system routes them through a security firewall, executes commands on infrastructure, and returns results.
 
 ## 2. System Architecture
 
@@ -16,7 +16,7 @@ h-cli is an AI-powered engineering assistant accessed via messaging interfaces. 
 
 ### Message Flow
 
-1. **User → Interface**: Message arrives via frontend (Telegram, future: web, CLI)
+1. **User → Interface**: Message arrives via frontend (Telegram, Slack, Discord, or Web UI)
 2. **Interface → Redis**: Task queued as JSON (`hcli:tasks`), state set to `queued`
 3. **Redis → Orchestration**: Dispatcher picks up task via BLPOP, state set to `running`
 4. **Orchestration → LLM Plugin**: Context injection (session history, chunks, vector memory), invokes AI model
@@ -37,8 +37,8 @@ Redis is the **task tracker** — it manages task lifecycle, delivers results, c
 
 | Module | Directory | Responsibility |
 |--------|-----------|---------------|
-| **Interfaces** | `interfaces/` | User-facing frontends. Each plugin (e.g. `telegram-bot/`) is self-contained. |
-| **Orchestration** | `orchestration/` | Task tracker and dispatcher. Redis task lifecycle, state machine, control channels, HMAC signing, context injection, session management. |
+| **Interfaces** | `interfaces/` | User-facing frontends. Four plugins: `telegram-bot/` (Telegram), `slack-bot/` (Slack Socket Mode), `discord-bot/` (Discord Gateway), `web/` (FastAPI + WebSocket). Each is self-contained. |
+| **Orchestration** | `orchestration/` | Concurrent task dispatcher. Redis task lifecycle, state machine, control channels, HMAC signing, context injection, session management. `MAX_CONCURRENT_TASKS` parallel executions with per-chat serialization. |
 | **LLM** | `llm/` | AI framework plugins. Each plugin (e.g. `claude-code/`) owns its firewall, memory proxy, and config. |
 | **Core** | `core/` | Command execution (MCP), vector memory search, infrastructure access. |
 | **Monitor** | `monitor/` | Observability. Grafana dashboards, TimescaleDB schema, trace export. |
@@ -49,37 +49,40 @@ Redis is the **task tracker** — it manages task lifecycle, delivers results, c
 
 ## 4. Network Topology
 
-Two Docker networks segment services. No ports exposed to host except Grafana.
+Two Docker networks segment services. Ports exposed to host: Grafana (:2405) and optionally Web UI (:8080).
 
 ```
 ┌─── h-network-frontend ──────────────────────────────────────┐
 │                                                               │
-│   Interface (telegram-bot)  ◄──only──►  Redis ──bridge──┐     │
-│                                                          │     │
-│   CVE checker                     Orchestration/LLM      │     │
-│                                   Grafana                │     │
-└──────────────────────────────────────────────────────────│────┘
-                                                           │
-┌─── h-network-backend ───────────────────────────────────│────┐
-│                                                          │     │
-│   Orchestration/LLM (claude) ──MCP (SSE)──► Core   Redis ┘     │
+│   Interfaces:                                                 │
+│     telegram-bot  ◄──only──►  Redis ──bridge──┐               │
+│     slack-bot     ◄──only──►                   │               │
+│     discord-bot   ◄──only──►  Orchestration/LLM│               │
+│     web-ui (:8080)◄──only──►                   │               │
+│                                                │               │
+│   CVE checker                  Grafana         │               │
+└──────────────────────────────────────────────────│────────────┘
+                                                   │
+┌─── h-network-backend ───────────────────────────│────────────┐
+│                                                  │             │
+│   Orchestration/LLM (claude) ──MCP (SSE)──► Core  Redis ┘     │
 │                                                               │
 │   TimescaleDB    Qdrant    Grafana (:2405 exposed)            │
 │   Grafana-renderer                                            │
 └───────────────────────────────────────────────────────────────┘
 
-Frontend only:  telegram-bot, CVE checker
+Frontend only:  telegram-bot, slack-bot, discord-bot, web-ui, CVE checker
 Backend only:   Core, TimescaleDB, Qdrant, Grafana-renderer
 Both networks:  Redis, Orchestration/LLM (claude), Grafana
 ```
 
 **Key rules**:
 - Two-network topology per security hardening (see `docs/SECURITY-HARDENING.md` items 3, F52).
-- No service exposes ports to the host except Grafana (host :2405 → container :3000).
+- Ports exposed to host: Grafana (host :2405 → container :3000), Web UI (host :8080 → container :8080).
 - Redis bridges both networks — it is the designated message bus between frontend and backend.
 - Core is backend-only — serves MCP (SSE) and reaches Redis via backend. Never on frontend.
 - Orchestration/LLM is on both networks: frontend for Redis (task lifecycle), backend for MCP calls to Core.
-- telegram-bot is frontend-only — communicates via Redis only, never calls MCP directly.
+- All interface plugins are frontend-only — communicate via Redis only, never call MCP directly.
 - MCP stays standard: firewall proxy connects to Core via SSE directly.
 
 ## 5. Security Model
@@ -119,7 +122,7 @@ Results are HMAC-SHA256 signed by orchestration, verified by interface. Prevents
 | State | Who sets it | What happens |
 |-------|------------|--------------|
 | `queued` | Interface | Task pushed to `hcli:tasks`, state key created |
-| `running` | Orchestration | BLPOP picks it up, state updated |
+| `running` | Orchestration | Thread pool worker picks it up, state updated |
 | `completed` | Orchestration | Result written (HMAC-signed), state updated |
 | `failed` | Orchestration | Error written, state updated |
 | `timed_out` | Orchestration | Process killed, state updated |
@@ -146,7 +149,11 @@ Fresh session UUID per request — no JSONL replay. History injected as plain te
 
 | Profile | Services | Use Case |
 |---------|----------|----------|
-| default | Core, Redis, Interface, Orchestration/LLM | Minimum deployment |
+| default | Core, Redis, Orchestration/LLM | Minimum deployment (no interface — add at least one below) |
+| telegram | Telegram bot | Telegram interface |
+| slack | Slack bot | Slack interface (Socket Mode) |
+| discord | Discord bot | Discord interface (Gateway) |
+| web | Web UI | Browser interface (FastAPI + WebSocket, port 8080) |
 | monitor | TimescaleDB, Grafana, Grafana Renderer | Metrics and dashboards |
 | vectordb | Qdrant | Semantic memory search |
 | tools | CVE checker | Security scanning |
@@ -175,10 +182,11 @@ Container and network names include `ENV_TAG` for multi-instance coexistence on 
 {
   "task_id": "string (UUID, required)",
   "message": "string (required)",
-  "chat_id": "int (required)",
-  "user_id": "int (required)",
+  "chat_id": "string or int (required)",
+  "user_id": "string or int (required)",
   "submitted_at": "string (ISO-8601, required)",
-  "model": "string (optional, default 'opus', enum: opus/sonnet/haiku)"
+  "model": "string (optional, default 'opus', enum: opus/sonnet/haiku)",
+  "source": "string (optional, enum: telegram/slack/web)"
 }
 ```
 
@@ -205,9 +213,9 @@ Container and network names include `ENV_TAG` for multi-instance coexistence on 
 
 Each module is self-contained:
 
-- **Interfaces**: Each frontend plugin has its own Dockerfile, LLD, and code. No shared code between frontends. Communicates with orchestration via Redis only.
+- **Interfaces**: Four frontend plugins (telegram-bot, slack-bot, discord-bot, web), each with its own Dockerfile, LLD, and code. No shared code between frontends. Communicates with orchestration via Redis only. All interfaces share the same Redis contracts and task JSON schema.
 - **LLM plugins**: Each framework has its own firewall, memory proxy, config, Dockerfile, and LLD. No shared code between plugins. Receives tasks from orchestration via Redis. Firewall connects to Core via MCP (direct SSE).
-- **Orchestration**: Owns the dispatcher and Redis task lifecycle. Split into `bus.py` (Redis operations, state machine, HMAC), `worker.py` (Claude invocation, skills, sessions), and `dispatcher.py` (thin main loop). All three run inside the LLM container. Orchestration owns the code, LLM owns the container packaging.
+- **Orchestration**: Owns the concurrent dispatcher and Redis task lifecycle. Split into `bus.py` (Redis operations, state machine, HMAC), `worker.py` (Claude invocation, skills, sessions), and `dispatcher.py` (concurrent ThreadPoolExecutor loop with per-chat serialization). All three run inside the LLM container. Orchestration owns the code, LLM owns the container packaging.
 - **Core**: Stateless command execution. Serves MCP endpoints (standard SSE). Publishes audit events to Redis (fire-and-forget). No knowledge of who's calling.
 - **Monitor**: Read-only observability. Consumes audit logs and metrics. Never in the request path.
 - **h-ssh**: SSH infrastructure integration. Self-contained CLI tool with multi-transport support, network command templates, and LLM skill files for natural language interaction.
@@ -225,12 +233,15 @@ Each module is self-contained:
 │
 ├── interfaces/              # User-facing frontends
 │   ├── HLD.md
-│   └── telegram-bot/        # Telegram bot plugin
+│   ├── telegram-bot/        # Telegram bot plugin
+│   ├── slack-bot/           # Slack bot plugin (Socket Mode)
+│   ├── discord-bot/         # Discord bot plugin (Gateway)
+│   └── web/                 # Web UI plugin (FastAPI + WebSocket)
 │
-├── orchestration/           # Task tracker and dispatcher
+├── orchestration/           # Concurrent task dispatcher
 │   ├── bus.py               # Redis task lifecycle, state machine, HMAC
 │   ├── worker.py            # Claude invocation, skills, sessions
-│   └── dispatcher.py        # Thin main loop (BLPOP, hand off, signal)
+│   └── dispatcher.py        # Concurrent ThreadPoolExecutor loop, per-chat serialization
 │
 ├── llm/                     # AI framework plugins
 │   ├── HLD.md
