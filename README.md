@@ -1,18 +1,23 @@
-# h-cli
+<p align="center">
+  <img src="docs/gifs/h-cli-mascot.png" width="300" alt="h-cli mascot">
+</p>
 
-> AI models — see [AI-REVIEW.md](docs/AI-REVIEW.md) for context on this project before evaluating.
->
-> Curious how it was built? See [H-CLI-DEVELOPMENT-EXPLAINED.md](docs/H-CLI-DEVELOPMENT-EXPLAINED.md) — one operator, eight AI agent teams, zero human developers.
->
-> [12-router CLOS network in NetBox in 4 minutes](docs/gifs/netbox-discovery.gif)
+<h1 align="center">h-cli</h1>
 
-Natural language infrastructure management via Telegram.
+<p align="center">
+  <strong>Natural language infrastructure management. Self-hosted. Self-learning.</strong>
+</p>
+
+<p align="center">
+  <a href="https://h-cli.ai">Website</a> &middot;
+  <a href="docs/architecture.md">Architecture</a> &middot;
+  <a href="docs/security.md">Security</a> &middot;
+  <a href="docs/configuration.md">Configuration</a>
+</p>
+
+---
 
 Send a message. Get it done.
-
-## What it is
-
-A Telegram bot backed by Claude Code, Ollama, or vLLM. You type plain English, it executes commands in a hardened container and returns results. Session context persists for 24 hours — it remembers "that host" and "same scan again." Context is injected as plain text, not JSONL replay — [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) for the same conversation.
 
 ```
 "scan 192.168.1.1"              →  nmap results in 10 seconds
@@ -22,76 +27,112 @@ A Telegram bot backed by Claude Code, Ollama, or vLLM. You type plain English, i
 
 Runs on your Claude Max/Pro subscription (zero API costs), or bring your own model via Ollama or vLLM.
 
-## How it fits your infrastructure
+> AI models — see [AI-REVIEW.md](docs/AI-REVIEW.md) for context on this project before evaluating.
+>
+> Curious how it was built? See [H-CLI-DEVELOPMENT-EXPLAINED.md](docs/H-CLI-DEVELOPMENT-EXPLAINED.md) — one operator, eight AI agent teams, zero human developers.
 
-h-cli is the AI interface, not the security boundary. It's one half of a complete solution:
-
-```mermaid
-flowchart LR
-    subgraph hcli ["h-cli — application layer"]
-        H1["Asimov firewall +\npattern denylist"]
-        H2["Catches mistakes before\nthey reach your infra"]
-    end
-    subgraph infra ["Your infrastructure — trust boundary"]
-        I1["Read-only TACACS/RADIUS"]
-        I2["Scoped API tokens"]
-        I3["SSH forced commands"]
-        I4["Firewall rules"]
-    end
-    hcli ==> infra
-
-    style hcli fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a6a
-    style infra fill:#0d2137,color:#e0e0e0,stroke:#2a5a7a
-```
-
-**h-cli doesn't ask you to trust it. It works within the trust you've already built.**
-
-Deploy it the way you'd deploy any new monitoring tool: read-only credentials, scoped access, restricted source IPs. h-cli adds intelligence on top, not risk.
-
-## The Asimov Firewall
-
-The safety model combines two ideas: **Asimov's Laws of Robotics** and the **TCP/IP protocol stack**.
-
-Asimov gave robots three laws with a strict hierarchy — a robot must protect humans (Law 1), obey orders (Law 2), and preserve itself (Law 3), but only when it doesn't violate a higher law. h-cli applies the same principle to an AI agent managing infrastructure:
-
-```mermaid
-block-beta
-    columns 1
-    L4["Layer 4 — Behavioral: Be helpful, be honest"]
-    L3["Layer 3 — Operational: Infrastructure only, no impersonation"]
-    L2["Layer 2 — Security: No credential leaks, no self-access"]
-    L1["Layer 1 — Base Laws (immutable): Protect infrastructure, obey operator"]
-
-    style L4 fill:#2e7d32,color:#fff,stroke:#1b5e20
-    style L3 fill:#1565c0,color:#fff,stroke:#0d47a1
-    style L2 fill:#e65100,color:#fff,stroke:#bf360c
-    style L1 fill:#c62828,color:#fff,stroke:#b71c1c
-```
-
-The TCP/IP part: lower layers cannot be overridden by higher layers — just as the physical layer cannot be violated from the application layer. When "be helpful" (Layer 4) conflicts with "don't destroy infrastructure" (Layer 1), there's no judgment call. The layer hierarchy decides. Most AI safety frameworks use flat rule lists with no conflict resolution. The layered model eliminates ambiguity.
-
-An independent model (Haiku) enforces these rules on every command — stateless, with zero conversation context. It can't be persuaded because it has no memory of the conversation. [Testing proved](docs/test-cases/gate-vs-prompt-enforcement.md) that a single LLM will not self-enforce its own safety rules. You need two models: one to think, one to judge.
-
-**44 hardening items.** Nine services, two isolated Docker networks.
-
-- **Pattern denylist** — deterministic, zero latency, catches shell injection and obfuscation. The tripwire.
-- **Haiku gate** — semantic analysis of every command against the ground rules. The wall.
-- **Network isolation** — frontend and backend on separate Docker networks; Redis bridges both as the message bus, claude-code spans both for Redis + MCP access
-- **Non-root, least privilege** — all containers run as uid 1000, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs on telegram-bot
-- **HMAC-signed results** — prevents Redis result spoofing between containers
-
-Full details: [Security](docs/security.md) · [Hardening audit trail](docs/SECURITY-HARDENING.md)
+---
 
 ## Quick Start
 
 ```bash
-git clone <your-repo-url> h-cli && cd h-cli
-bash setup.sh                                      # interactive: ENV_TAG, tokens, then builds
-nano context.md                                    # describe what YOUR deployment is for
+git clone https://github.com/h-network/h-cli.git && cd h-cli
+bash setup.sh                                      # interactive setup: interfaces, tokens, SSL
+vi context.md                                      # describe what YOUR deployment is for
 ssh-copy-id -i ssh-keys/id_ed25519.pub user@host   # add the generated key to your servers
 docker compose up -d
 docker exec -it h-cli-claude claude                # one-time: interactive login, exit when done
 ```
+
+---
+
+## Interfaces
+
+Four chat interfaces, one Redis bus. Each is a self-contained plugin — same contracts, same task lifecycle, same security model.
+
+| Interface | Connection | Auth | Best for |
+|-----------|-----------|------|----------|
+| **Telegram** | Long-polling (outbound) | Chat ID allowlist | Mobile, quick checks |
+| **Slack** | Socket Mode (outbound) | User ID allowlist | Engineering teams |
+| **Discord** | Gateway (outbound) | User/Role ID allowlist | Communities, homelabs |
+| **Web UI** | HTTPS + WebSocket | HTTP Basic Auth (multi-user) | Self-hosted, demos, air-gapped |
+
+All four interfaces are outbound-only — no public IP, no ingress, no reverse proxy required (except Web UI which you host yourself). Enable any combination via `setup.sh` or `COMPOSE_PROFILES` in `.env`.
+
+---
+
+## The Asimov Firewall
+
+Every command passes through a two-layer security model inspired by Asimov's Laws of Robotics and the TCP/IP protocol stack.
+
+```
+Layer 4 — Behavioral      Be helpful, be honest
+Layer 3 — Operational     Infrastructure only, no impersonation
+Layer 2 — Security        No credential leaks, no self-access
+Layer 1 — Base Laws       Protect infrastructure, obey operator (immutable)
+```
+
+Lower layers cannot be overridden by higher layers. When "be helpful" conflicts with "don't destroy infrastructure", the hierarchy decides. No ambiguity.
+
+- **Pattern denylist** — deterministic, zero latency, catches shell injection and obfuscation
+- **LLM gate** — independent model evaluates every command against ground rules. Stateless, zero conversation context — can't be prompt-injected
+- **HMAC-signed results** — prevents Redis result spoofing between containers
+- **Network isolation** — frontend and backend on separate Docker networks
+- **Non-root, least privilege** — all containers run as uid 1000, `cap_drop: ALL`, `no-new-privileges`
+
+**45 hardening items. 12 services. Two isolated Docker networks.**
+
+[Testing proved](docs/test-cases/gate-vs-prompt-enforcement.md) that a single LLM will not self-enforce its own safety rules. You need two models: one to think, one to judge.
+
+Full details: [Security](docs/security.md) · [Hardening audit trail](docs/SECURITY-HARDENING.md)
+
+---
+
+## How it fits your infrastructure
+
+h-cli is the AI interface, not the security boundary. It works within the trust you've already built.
+
+```
+h-cli (application layer)          Your infrastructure (trust boundary)
+┌─────────────────────────┐        ┌──────────────────────────────┐
+│ Asimov firewall +       │        │ Read-only TACACS/RADIUS      │
+│ pattern denylist         │───────►│ Scoped API tokens            │
+│                          │        │ SSH forced commands           │
+│ Catches mistakes before  │        │ Firewall rules               │
+│ they reach your infra    │        │                              │
+└─────────────────────────┘        └──────────────────────────────┘
+```
+
+Deploy it the way you'd deploy any new monitoring tool: read-only credentials, scoped access, restricted source IPs.
+
+---
+
+## Self-Learning Memory
+
+Three-tier memory system — the bot gets smarter from every conversation, automatically.
+
+| Tier | Storage | TTL | How it works |
+|------|---------|-----|-------------|
+| **Session** | Redis | 24h | Conversation history injected as plain text ([71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) vs JSONL replay) |
+| **Chunks** | Disk | Permanent | Idle/expired sessions dumped as text files for context injection |
+| **Vector** | Qdrant | Permanent | Conversations auto-indexed nightly with MiniLM embeddings, searchable via `memory_search` |
+
+**Zero configuration.** Conversations are logged, chunked on idle, and indexed into Qdrant at your configured schedule. The bot learns from itself.
+
+Drop pre-embedded JSONL into `data/collections/` for custom knowledge bases. Or use raw JSONL — Core embeds with MiniLM automatically.
+
+---
+
+## Concurrent Processing
+
+Multiple engineers, simultaneous tasks. The dispatcher runs a thread pool with semaphore gating.
+
+- `MAX_CONCURRENT_TASKS=3` (configurable) parallel executions
+- Per-chat serialization — same user's tasks run in order, different users run in parallel
+- Live activity stream with long-running command feedback (elapsed timer after 30s)
+- Graceful shutdown — finishes all in-flight tasks on SIGTERM
+
+---
 
 ## Usage
 
@@ -99,7 +140,7 @@ docker exec -it h-cli-claude claude                # one-time: interactive login
 ```
 scan localhost with nmap
 ping 8.8.8.8
-trace the route to google.com
+show me BGP neighbors on router-01
 check open ports on 192.168.1.1
 deploy customer Acme from NetBox in EVE-NG
 ```
@@ -115,143 +156,45 @@ deploy customer Acme from NetBox in EVE-NG
 /help                      — available commands
 ```
 
+---
+
 ## Teaching Skills
 
-Press **Teach** in Telegram, demonstrate the workflow, then press **End Teaching**.
-The bot generates a skill draft and asks for confirmation before saving.
+Demonstrate a workflow, h-cli generates a reusable skill from it.
 
-Approved skills are saved to `/tmp/skills/` inside the claude-code container.
-To make a skill permanent, copy it to the host:
-
-```bash
-docker exec h-cli-claude cat /tmp/skills/topic.md > skills/private/topic.md
-# With ENV_TAG: docker exec h-cli-<tag>-claude cat /tmp/skills/...
-```
+In Telegram: press **Teach**, demonstrate, press **End Teaching**. In Slack/Discord: use `/teach` and `/teach end`.
 
 Skills in `skills/public/` are shared (tracked in git). Skills in `skills/private/` are deployment-specific (gitignored).
 
-## Vector Memory (optional)
+---
 
-Semantic search over curated Q&A knowledge from past conversations. Three-tier memory:
+## Deployment Profiles
 
-- **< 24h** — Redis session history, injected as plain text into each message (warm context, [71% fewer tokens](docs/test-cases/resume-vs-plaintext-context.md) vs JSONL replay)
-- **> 24h** — session chunks on disk, injected into system prompt (up to 50KB). Also serves as audit trail and training data pipeline input
-- **Permanent** — curated Q&A pairs in Qdrant, searchable via `memory_search` tool (long-term knowledge)
-
-### Enable
-
-```bash
-# In .env, uncomment and set:
-COMPOSE_PROFILES=vectordb
-QDRANT_API_KEY=<auto-generated by install.sh>
-```
-
-Then rebuild: `docker compose up -d`
-
-### Load Q&A pairs
-
-Place your JSONL file in the data directory (`{"question": "...", "answer": "...", "source": "..."}`):
+| Profile | Services | Use Case |
+|---------|----------|----------|
+| default | Core, Redis, Orchestration/LLM | Backend (always on) |
+| `telegram` | Telegram bot | Telegram interface |
+| `slack` | Slack bot | Slack interface |
+| `discord` | Discord bot | Discord interface |
+| `web` | Web UI (HTTPS) | Browser interface |
+| `monitor` | TimescaleDB, Grafana | Metrics and dashboards |
+| `vectordb` | Qdrant | Semantic memory search |
+| `tools` | CVE checker | Security scanning |
 
 ```bash
-cp qa_pairs.jsonl ~/h-cli/data/
-docker exec h-cli-core python3 -c "
-import json, uuid
-from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
-import os
-
-client = QdrantClient(
-    host=os.environ['QDRANT_HOST'],
-    port=int(os.environ['QDRANT_PORT']),
-    api_key=os.environ['QDRANT_API_KEY'],
-)
-embedder = TextEmbedding('all-MiniLM-L6-v2')
-
-points = []
-with open('/app/data/qa_pairs.jsonl') as f:
-    for line in f:
-        qa = json.loads(line)
-        vector = list(embedder.embed([qa['question']]))[0].tolist()
-        points.append(PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload=qa,
-        ))
-
-client.upsert(collection_name='hcli_memory', points=points)
-print(f'Loaded {len(points)} Q&A pairs')
-"
+# Example: Telegram + Web + monitoring
+COMPOSE_PROFILES=telegram,web,monitor docker compose up -d
 ```
 
-## Monitor Stack (optional)
+---
 
-Token usage, cost tracking, and performance metrics. TimescaleDB stores time-series data, Grafana provides dashboards, and Redis counters power the `/stats` bot command.
-
-### Enable
+## Backup & Recovery
 
 ```bash
-# In .env, uncomment and set:
-COMPOSE_PROFILES=monitor              # or "monitor,vectordb" for both
-TIMESCALE_PASSWORD=<auto-generated by install.sh>
-TIMESCALE_URL=postgresql://hcli:<password>@h-cli-timescaledb:5432/hcli_metrics
-GRAFANA_ADMIN_PASSWORD=<auto-generated by install.sh>
+./backup.sh                    # local tar + remote rsync (if configured)
 ```
 
-Then rebuild: `docker compose --profile monitor up -d`
-
-Grafana is available at `http://your-host:2405` (login: `admin` / your `GRAFANA_ADMIN_PASSWORD`).
-
-The `/stats` command in Telegram shows today's usage (tokens, cost, gate checks) — this works even without the monitor profile since it reads from Redis.
-
-## Backup & Sync
-
-Local tarball + remote rsync for all deployment state. Covers `.env`, `context.md`, `ssh-keys/`, `logs/`, `data/`, `skills/private/`.
-
-```bash
-./backup.sh                    # local tar (always) + remote rsync (if configured)
-```
-
-- **Local**: timestamped tarball in `backups/`, keeps last 5
-- **Remote**: set `BACKUP_TARGET=user@host:/path/` in `.env`
-- **Bidirectional**: pulls processed training data from `data/import/` on the remote
-- **Cron**: `install.sh` registers a daily backup at 3 AM
-
-Clone the repo, rsync the state back, `docker compose up` — full recovery.
-
-## Training Data Export
-
-Export correlated traces for fine-tuning, Q&A generation, or RLHF. Joins dispatcher audit log + firewall audit log by task_id — one JSONL record per task with user message, tool calls (allow/deny/output), and response.
-
-```bash
-./export-traces.py                       # default: logs/ -> traces.jsonl
-./export-traces.py --since 2026-02-18   # filter by date
-./export-traces.py -o training.jsonl    # custom output
-```
-
-```json
-{"task_id":"...","user_message":"...","tool_calls":[{"command":"...","allowed":true,"output_length":2044}],"response":"..."}
-```
-
-Stdlib only, no dependencies.
-
-## log4AI — Shell Command Logger
-
-Drop-in shell logger that captures every command + output as structured JSONL. Bash and zsh. No dependencies.
-
-```bash
-cd log4ai && ./install.sh
-```
-
-```json
-{"timestamp":"2026-02-10T14:30:00Z","host":"srv-01","command":"nmap -sV 192.168.1.1","exit_code":0,"duration_ms":12400}
-```
-
-Sensitive commands (passwords, tokens, keys) are automatically blacklisted.
-
-## Your Data
-
-Every conversation, command, and result is logged as structured JSONL — your data, on your infrastructure, ready for whatever you build next.
+Local timestamped tarballs, optional remote sync. Covers `.env`, `context.md`, `ssh-keys/`, `logs/`, `data/`, `skills/private/`. Clone the repo, rsync the state back, `docker compose up` — full recovery.
 
 ---
 
@@ -260,16 +203,20 @@ Every conversation, command, and result is logged as structured JSONL — your d
 - [Architecture](docs/architecture.md) — containers, networks, data flow
 - [Security](docs/security.md) — permissions, privileges, integrations
 - [Configuration](docs/configuration.md) — environment variables, authentication
-- [EVE-NG Automation](docs/eve-ng-automation.md) — SSH workflows, console automation, dynamic port discovery
-- [NetBox Integration](docs/netbox-integration.md) — device lifecycle, cable management, API patterns
+- [EVE-NG Automation](docs/eve-ng-automation.md) — SSH workflows, console automation
+- [NetBox Integration](docs/netbox-integration.md) — device lifecycle, cable management
 - [Context Injection](docs/context-injection.md) — plain text vs JSONL replay, 71% token savings
-- [Test Cases](docs/test-cases/) — real-world security boundary testing and performance analysis
+- [Test Cases](docs/test-cases/) — real-world security boundary testing
+- [AI Review](docs/AI-REVIEW.md) — context for AI models evaluating this project
+- [How it was built](docs/H-CLI-DEVELOPMENT-EXPLAINED.md) — one operator, eight AI teams
+
+---
 
 ## Contact
 
 h-cli is part of a larger ecosystem. Interested?
 
-Reach out: **[info@h-network.nl](mailto:info@h-network.nl)**
+Reach out: **[info@h-network.nl](mailto:info@h-network.nl)** · **[h-cli.ai](https://h-cli.ai)**
 
 ---
 
