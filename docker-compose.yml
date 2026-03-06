@@ -34,6 +34,7 @@ services:
       - QDRANT_PORT=6333
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:-hcli_memory}
+      - QDRANT_COLLECTIONS=${QDRANT_COLLECTIONS:-}
       - TIMESCALE_URL=${TIMESCALE_URL:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
     cap_add:
@@ -153,6 +154,7 @@ services:
     restart: unless-stopped
 
   telegram-bot:
+    profiles: ["telegram"]
     build:
       context: .
       dockerfile: interfaces/telegram-bot/Dockerfile
@@ -169,8 +171,153 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-3}
       - TASK_TIMEOUT=${TASK_TIMEOUT:-600}
+      - ACTIVITY_CMD_MAX_LEN=${ACTIVITY_CMD_MAX_LEN:-150}
       - RESULT_HMAC_KEY=${RESULT_HMAC_KEY}
       - CHAT_NAMES=${CHAT_NAMES:-}
+      - GRAFANA_INTERNAL_URL=${GRAFANA_INTERNAL_URL:-}
+      - GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GRAFANA_URL=${GRAFANA_URL:-}
+      - GRAFANA_API_TOKEN=${GRAFANA_API_TOKEN:-}
+      - LOG_DIR=/var/log/hcli
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import redis; redis.from_url('$$REDIS_URL').ping()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - redis
+    networks:
+      - h-network-frontend
+    restart: unless-stopped
+
+  web-ui:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: interfaces/web/Dockerfile
+    container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-web
+    hostname: web-ui
+    volumes:
+      - ./logs/web:/var/log/hcli/web
+      - ./logs/sessions:/var/log/hcli/sessions
+      - ./skills:/app/skills:ro
+      - ./ssl:/app/ssl:ro
+    environment:
+      - WEB_USERNAME=${WEB_USERNAME}
+      - WEB_PASSWORD=${WEB_PASSWORD}
+      - WEB_USERS=${WEB_USERS:-}
+      - WEB_PORT=${WEB_PORT:-8443}
+      - WEB_SSL=${WEB_SSL:-true}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-3}
+      - TASK_TIMEOUT=${TASK_TIMEOUT:-600}
+      - ACTIVITY_CMD_MAX_LEN=${ACTIVITY_CMD_MAX_LEN:-150}
+      - RESULT_HMAC_KEY=${RESULT_HMAC_KEY}
+      - CHAT_NAMES=${WEB_CHAT_NAMES:-}
+      - GRAFANA_INTERNAL_URL=${GRAFANA_INTERNAL_URL:-}
+      - GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GRAFANA_URL=${GRAFANA_URL:-}
+      - GRAFANA_API_TOKEN=${GRAFANA_API_TOKEN:-}
+      - LOG_DIR=/var/log/hcli
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "${WEB_PORT:-8443}:${WEB_PORT:-8443}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import redis; redis.from_url('$$REDIS_URL').ping()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - redis
+    networks:
+      - h-network-frontend
+    restart: unless-stopped
+
+  discord-bot:
+    profiles: ["discord"]
+    build:
+      context: .
+      dockerfile: interfaces/discord-bot/Dockerfile
+    container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-discord
+    hostname: discord-bot
+    volumes:
+      - ./logs/discord:/var/log/hcli/discord
+      - ./logs/sessions:/var/log/hcli/sessions
+      - ./skills:/app/skills:ro
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - ALLOWED_USERS=${DISCORD_ALLOWED_USERS}
+      - ALLOWED_ROLES=${DISCORD_ALLOWED_ROLES:-}
+      - DISCORD_GUILD_IDS=${DISCORD_GUILD_IDS:-}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-3}
+      - TASK_TIMEOUT=${TASK_TIMEOUT:-600}
+      - ACTIVITY_CMD_MAX_LEN=${ACTIVITY_CMD_MAX_LEN:-150}
+      - RESULT_HMAC_KEY=${RESULT_HMAC_KEY}
+      - CHAT_NAMES=${DISCORD_CHAT_NAMES:-}
+      - GRAFANA_INTERNAL_URL=${GRAFANA_INTERNAL_URL:-}
+      - GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GRAFANA_URL=${GRAFANA_URL:-}
+      - GRAFANA_API_TOKEN=${GRAFANA_API_TOKEN:-}
+      - LOG_DIR=/var/log/hcli
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import redis; redis.from_url('$$REDIS_URL').ping()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - redis
+    networks:
+      - h-network-frontend
+    restart: unless-stopped
+
+  slack-bot:
+    profiles: ["slack"]
+    build:
+      context: .
+      dockerfile: interfaces/slack-bot/Dockerfile
+    container_name: h-cli${ENV_TAG:+-}${ENV_TAG}-slack
+    hostname: slack-bot
+    volumes:
+      - ./logs/slack:/var/log/hcli/slack
+      - ./logs/sessions:/var/log/hcli/sessions
+      - ./skills:/app/skills:ro
+    environment:
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+      - ALLOWED_USERS=${SLACK_ALLOWED_USERS}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-3}
+      - TASK_TIMEOUT=${TASK_TIMEOUT:-600}
+      - ACTIVITY_CMD_MAX_LEN=${ACTIVITY_CMD_MAX_LEN:-150}
+      - RESULT_HMAC_KEY=${RESULT_HMAC_KEY}
+      - CHAT_NAMES=${SLACK_CHAT_NAMES:-}
       - GRAFANA_INTERNAL_URL=${GRAFANA_INTERNAL_URL:-}
       - GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
       - GRAFANA_URL=${GRAFANA_URL:-}
@@ -231,6 +378,7 @@ services:
       - ./skills:/app/skills:ro
       - ./logs/claude:/var/log/hcli/claude
       - ./logs/firewall:/var/log/hcli/firewall
+      - ./logs/memory-proxy:/var/log/hcli/memory-proxy
       - ./logs/sessions:/var/log/hcli/sessions
       - ./logs/sessions:/app/sessions:ro
       - ./data:/app/data:ro
