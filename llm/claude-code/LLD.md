@@ -62,13 +62,13 @@ The dispatcher (in `orchestration/`) spawns `claude -p --mcp-config llm/claude-c
 
 | Section | Lines | Responsibility |
 |---------|-------|----------------|
-| Pattern loading | 44–64 | Loads denylist from env var + file, one pattern per line |
-| Ground rules loading | 68–74 | Reads `groundRules.md` at startup (fails hard if gate is enabled) |
+| Pattern loading | 44–65 | Loads denylist from env var + file, one pattern per line |
+| Ground rules loading | 68–75 | Reads `groundRules.md` at startup (fails hard if gate is enabled) |
 | `_normalize_command()` | 174–185 | Lowercase, strip quotes, collapse whitespace |
 | `_pattern_check()` | 188–194 | Substring match against all blocked patterns |
 | `_gate_check()` | 197–273 | Spawns `claude -p` with Haiku model, passes only rules + command |
-| `_forward_to_core()` | 276–299 | SSE MCP client → `core:8083` `run_command`, injects `TASK_ID` from env |
-| `run_command()` | 300–348 | Main MCP tool: pattern check → gate check → forward |
+| `_forward_to_core()` | 276–300 | SSE MCP client → `core:8083` `run_command`, injects `TASK_ID` from env |
+| `run_command()` | 303–351 | Main MCP tool: pattern check → gate check → forward |
 | Metrics | 116–166 | Redis gate counters + TimescaleDB `tool_calls` table |
 
 **Key design decisions**:
@@ -85,8 +85,8 @@ The dispatcher (in `orchestration/`) spawns `claude -p --mcp-config llm/claude-c
 
 | Section | Lines | Responsibility |
 |---------|-------|----------------|
-| `_forward_to_memory()` | 24–44 | SSE MCP client → `core:8084` `memory_search` |
-| `memory_search()` | 47–58 | MCP tool definition (query + limit params) |
+| `_forward_to_memory()` | 24–44 | SSE MCP client → `core:8084` `memory_search`, generic dict forwarding |
+| `memory_search()` | 47–65 | MCP tool definition (query + collection + limit params) |
 
 **Key design decisions**:
 - **No gate**: Memory search is read-only semantic search. No destructive potential.

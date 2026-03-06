@@ -21,14 +21,14 @@ MEMORY_SSE_URL = os.environ.get("MEMORY_SSE_URL", "http://h-cli-core:8084/sse")
 mcp = FastMCP("h-cli-memory")
 
 
-async def _forward_to_memory(query: str, limit: int) -> str:
+async def _forward_to_memory(args: dict) -> str:
     """Forward search request to core's memory server via SSE."""
     try:
         async with sse_client(MEMORY_SSE_URL) as streams:
             async with ClientSession(*streams) as session:
                 await session.initialize()
                 result = await asyncio.wait_for(
-                    session.call_tool("memory_search", {"query": query, "limit": limit}),
+                    session.call_tool("memory_search", args),
                     timeout=30,
                 )
                 texts = []
@@ -37,7 +37,7 @@ async def _forward_to_memory(query: str, limit: int) -> str:
                         texts.append(block.text)
                 return "\n".join(texts) if texts else "No results."
     except asyncio.TimeoutError:
-        logger.error("Memory server timed out for query: %s", query[:100])
+        logger.error("Memory server timed out for query: %s", str(args.get("query", ""))[:100])
         return "Error: memory search timed out"
     except Exception as e:
         logger.exception("Failed to forward to memory server")
@@ -45,18 +45,24 @@ async def _forward_to_memory(query: str, limit: int) -> str:
 
 
 @mcp.tool()
-async def memory_search(query: str, limit: int = 5) -> str:
+async def memory_search(query: str, collection: str = "", limit: int = 5) -> str:
     """Search curated Q&A memory for relevant past knowledge.
 
     Use this to find answers from previous conversations that were
     curated into long-term memory. Returns the most relevant entries.
+    Multiple collections may be available — use collection="" (default)
+    for curated Q&A, or specify a collection name to search elsewhere.
 
     Args:
         query: Natural language search query.
+        collection: Collection to search (empty string = default collection).
         limit: Maximum number of results (default 5, max 20).
     """
     limit = max(1, min(limit, 20))
-    return await _forward_to_memory(query, limit)
+    args = {"query": query, "limit": limit}
+    if collection:
+        args["collection"] = collection
+    return await _forward_to_memory(args)
 
 
 if __name__ == "__main__":
