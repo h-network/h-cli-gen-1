@@ -9,6 +9,10 @@ ssh-keys/*
 !ssh-keys/.gitkeep
 !ssh-keys/README.md
 
+# SSL certificates
+ssl/*
+!ssl/.gitkeep
+
 # Python
 __pycache__/
 *.pyc

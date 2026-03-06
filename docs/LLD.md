@@ -14,11 +14,19 @@ docs/
 ├── context-injection.md                     # Plain text vs JSONL replay — design rationale + benchmarks
 ├── eve-ng-automation.md                     # EVE-NG integration: SSH, console, lab automation
 ├── netbox-integration.md                    # NetBox integration: device CRUD, cable management
-├── Team_instructions.md                     # Knowledge team governance
+├── h-ssh-integration-advice.md              # h-ssh integration guidance
+├── EXECUTIVE-SUMMARY.md                     # One-page project overview
+├── H-CLI-DEVELOPMENT-EXPLAINED.md           # How the AI team built h-cli
+├── AI-REVIEW.md                             # Instructions for AI model evaluators
+├── ROADMAP.md                               # Feature status and planned work
+├── SECURITY-HARDENING.md                    # Full security audit trail (45 items)
 ├── LLD.md                                   # This document
+├── decisions/                               # Architecture decision records
+├── proposals/                               # Design proposals
 ├── gifs/                                    # Visual demos
 │   ├── configure-network.gif
 │   ├── deploy-lab.gif
+│   ├── netbox-discovery.gif
 │   └── verify-topology.gif
 └── test-cases/                              # Validated behavioral tests (13 cases)
     ├── autonomous-docker-restart.md

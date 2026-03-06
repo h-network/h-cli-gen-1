@@ -2,6 +2,10 @@
 
 Owns all Redis key constants and task state transitions. Single source of
 truth for the Redis namespace. Other modules import key constants from here.
+
+Thread-safety: TaskBus methods that operate on self.r (Redis) are safe for
+concurrent calls — redis-py uses an internal connection pool. The control
+channel tracking dict (_control_threads) is protected by a lock.
 """
 
 import hashlib
@@ -66,23 +70,31 @@ def _sign_result(task_id: str, output: str, completed_at: str) -> str:
 # ── TimescaleDB (optional) ──────────────────────────────────────────────
 
 TIMESCALE_URL = os.environ.get("TIMESCALE_URL", "")
+MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "3"))
 _pg_pool = None
+_pg_pool_lock = threading.Lock()
 
 
 def _get_pg_pool():
+    """Get or create the TimescaleDB connection pool. Thread-safe."""
     global _pg_pool
     if _pg_pool is not None:
         return _pg_pool
     if not TIMESCALE_URL:
         return None
-    try:
-        import psycopg2
-        import psycopg2.pool
-        _pg_pool = psycopg2.pool.SimpleConnectionPool(1, 3, TIMESCALE_URL)
-        return _pg_pool
-    except Exception as e:
-        logger.warning("TimescaleDB connection failed, metrics disabled: %s", e)
-        return None
+    with _pg_pool_lock:
+        if _pg_pool is not None:
+            return _pg_pool
+        try:
+            import psycopg2
+            import psycopg2.pool
+            _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                1, MAX_CONCURRENT_TASKS + 1, TIMESCALE_URL,
+            )
+            return _pg_pool
+        except Exception as e:
+            logger.warning("TimescaleDB connection failed, metrics disabled: %s", e)
+            return None
 
 
 # ── TaskBus ──────────────────────────────────────────────────────────────
@@ -96,8 +108,9 @@ class TaskBus:
         self.redis_url = redis_url
         self.r: redis.Redis | None = None
         self._sub_r: redis.Redis | None = None
-        self._control_thread: threading.Thread | None = None
-        self._stop_control: threading.Event | None = None
+        # Per-task control channel tracking: {task_id: (thread, stop_event)}
+        self._control_threads_lock = threading.Lock()
+        self._control_threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
 
     def connect(self):
         """Connect to Redis (main + separate pub/sub connection)."""
@@ -198,11 +211,11 @@ class TaskBus:
         """Subscribe to hcli:control:{task_id} in a daemon thread.
 
         On abort message: sets abort_event, kills process via proc_ref[0].
-        Call unsubscribe_control() when the task is done.
+        Call unsubscribe_control(task_id) when the task is done.
+        Thread-safe: each task gets its own listener tracked by task_id.
         """
         channel = _control_channel(task_id)
-        self._stop_control = threading.Event()
-        stop = self._stop_control
+        stop = threading.Event()
 
         def _listener():
             pubsub = self._sub_r.pubsub()
@@ -237,16 +250,18 @@ class TaskBus:
 
         t = threading.Thread(target=_listener, daemon=True)
         t.start()
-        self._control_thread = t
+        with self._control_threads_lock:
+            self._control_threads[task_id] = (t, stop)
 
-    def unsubscribe_control(self):
-        """Stop control channel listener thread."""
-        if self._stop_control:
-            self._stop_control.set()
-        if self._control_thread:
-            self._control_thread.join(timeout=3)
-        self._control_thread = None
-        self._stop_control = None
+    def unsubscribe_control(self, task_id: str):
+        """Stop control channel listener for a specific task. Thread-safe."""
+        with self._control_threads_lock:
+            entry = self._control_threads.pop(task_id, None)
+        if entry is None:
+            return
+        thread, stop_event = entry
+        stop_event.set()
+        thread.join(timeout=3)
 
     # ── Metrics ──────────────────────────────────────────────────────
 

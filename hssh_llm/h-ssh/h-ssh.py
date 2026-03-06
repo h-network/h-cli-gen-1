@@ -282,11 +282,11 @@ def main() -> int:
             print("ERROR: No operation specified. Use -sC, -eC, -eD, -eB, or --job.", file=sys.stderr)
             return 2
 
-        # Resolve command shortcuts
+        # Resolve command shortcuts per vendor
         if mode == "show":
-            resolved_commands = {}
+            per_device_commands = {}
             for dev in devices:
-                resolved_commands[dev.vendor] = resolve_command(command, dev.vendor, cmd_dir)
+                per_device_commands[dev.name] = resolve_command(command, dev.vendor, cmd_dir)
 
     # --- Credential resolution (B1) ---
     password = args.password
@@ -316,10 +316,9 @@ def main() -> int:
         if not args.json:
             print_result(result, quiet=args.quiet)
 
-    # For show mode with command shortcuts, we need per-vendor command resolution
     if mode == "show":
-        cmd_dir = Path(__file__).resolve().parent / "commands"
-        actual_command = resolve_command(command, devices[0].vendor, cmd_dir)
+        actual_command = resolve_command(command, devices[0].vendor,
+                                         Path(__file__).resolve().parent / "commands")
     elif mode == "job":
         actual_command = ""
     else:

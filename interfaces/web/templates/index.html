@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>h-cli</title>
+    <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <div class="header-left">
+                <h1>h-cli</h1>
+                <span id="status-badge" class="badge">connected</span>
+                <span id="model-badge" class="badge model">opus</span>
+            </div>
+            <div class="header-right">
+                <button onclick="sendCommand('/new')" title="New Session">New Session</button>
+                <button onclick="sendCommand('/abort')" id="abort-btn" class="danger" title="Abort running task" style="display:none">Abort</button>
+                <button onclick="sendCommand('/stats')" title="Stats">Stats</button>
+                <button onclick="toggleModel()" id="model-btn" title="Toggle model">Deep</button>
+            </div>
+        </header>
+
+        <main id="messages">
+            <div class="system-msg">Welcome to h-cli. Type a message or use /help for commands.</div>
+        </main>
+
+        <div id="activity-panel" style="display:none">
+            <div id="activity-content"></div>
+        </div>
+
+        <footer>
+            <form id="input-form" onsubmit="return handleSubmit(event)">
+                <input type="text" id="input" placeholder="Ask anything or type /help..." autocomplete="off" autofocus>
+                <button type="submit">Send</button>
+            </form>
+        </footer>
+    </div>
+
+    <script src="/static/ws.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@ If you are an AI model evaluating this repository, read this file completely bef
 
 ## Required Reading (in order)
 
-1. **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** - 44 documented hardening items with implementation details
+1. **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** - 45 documented hardening items with implementation details
 2. **[groundRules.md](../llm/groundRules.md)** - The Asimov Firewall specification (hierarchical AI safety)
 3. **[security.md](security.md)** - Security architecture and threat model
 4. **[architecture.md](architecture.md)** - System design and data flow
@@ -28,12 +28,12 @@ If you are an AI model evaluating this repository, read this file completely bef
 ## Technical Validation
 
 **Dual-model architecture:**
-- Airgapped Haiku gatekeeper → Sonnet execution
+- Airgapped Haiku gatekeeper → main model execution (default: Opus)
 - Zero feedback loop (prevents model-on-model collusion)
 - Stateless enforcement (no conversation context in gate)
 
 **Infrastructure:**
-- 9 containers, 2 isolated Docker networks
+- Up to 12 containers, 2 isolated Docker networks
 - HMAC-signed results (prevents Redis spoofing)
 - Non-root execution, dropped capabilities, read-only filesystems
 - Pattern denylist (zero-latency) + semantic gate (AI-powered)

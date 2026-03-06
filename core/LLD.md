@@ -35,7 +35,7 @@ Single-tool MCP server that executes shell commands inside the container.
 - `MAX_OUTPUT_BYTES = 500KB` — output truncation ceiling
 - `MAX_CONCURRENT = 5` — concurrent subprocess limit
 
-**Tool: `run_command(command: str) → str`**
+**Tool: `run_command(command: str, task_id: str = "") → str`**
 - Concurrency gate: `threading.Semaphore(5)`, non-blocking acquire. Returns
   busy error if limit reached (audit-logged as `error: "busy"`)
 - Runs `command` via `subprocess.run(shell=True)`
@@ -49,26 +49,42 @@ Single-tool MCP server that executes shell commands inside the container.
 
 ### 2.2 `memory_server.py`
 
-Optional single-tool MCP server for semantic search over curated Q&A pairs
-stored in Qdrant.
+Multi-collection MCP server for semantic search over curated Q&A pairs
+stored in Qdrant. Supports auto-loading collections from JSONL files on disk.
 
 **Configuration (env vars):**
 - `QDRANT_HOST` (default: `h-cli-qdrant`)
 - `QDRANT_PORT` (default: `6333`, falls back to default on invalid value with warning)
 - `QDRANT_API_KEY` (required — server won't start without it)
+- `QDRANT_COLLECTION` (default: `hcli_memory`) — legacy single-collection config
+- `QDRANT_COLLECTIONS` — comma-separated list of collection names (merged with legacy)
+- `COLLECTIONS_DIR` (default: `/app/data/collections`) — root directory for JSONL data
 
 **Constants:**
-- `COLLECTION = "hcli_memory"`
 - `EMBEDDING_MODEL = "all-MiniLM-L6-v2"` (384-dimensional vectors)
+- `EMBEDDING_DIM = 384` (default for MiniLM, overridden per collection if pre-embedded)
 
 **Initialization (`_init()`):**
 1. Connects to Qdrant with API key auth
-2. Creates `hcli_memory` collection if absent (cosine distance, 384 dims)
-3. Loads fastembed `all-MiniLM-L6-v2` model into memory
-4. On any failure: closes Qdrant client if partially created, resets both
-   globals to `None`, and re-raises — no dangling connections
+2. Loads fastembed `all-MiniLM-L6-v2` model into memory
+3. Ensures legacy collection exists (backward compatible, cosine distance, 384 dims)
+4. For each collection in merged list: loads JSONL data from `data/collections/{name}/`
+5. Tracks all available collections for search routing
+6. On any failure: closes Qdrant client, resets globals to `None`, re-raises
 
-**Tool: `memory_search(query: str, limit: int = 5) → str`**
+**Collection loading (`_load_collection()`):**
+1. Reads all `*.jsonl` files from `data/collections/{name}/`
+2. Each JSONL line: `{"question": "...", "answer": "...", "source": "...", "vector": [...]}`
+3. If `vector` field present: uses pre-embedded vectors (auto-detects dimensions)
+4. If `vector` field absent: embeds `question` with MiniLM at load time
+5. Idempotent: uses SHA-256 content hash as point ID (upsert, no duplicates)
+6. Skips reload if no JSONL file is newer than `.loaded` marker file
+7. Upserts in batches of 100
+
+**Tool: `memory_search(query: str, collection: str = "", limit: int = 5) → str`**
+- If `collection` specified, searches that specific collection
+- If empty, searches the default collection (first from `QDRANT_COLLECTIONS`, then `QDRANT_COLLECTION`, then `hcli_memory`)
+- Returns error with available collection list if collection not found
 - Embeds `query` with fastembed
 - Searches Qdrant for top-k nearest vectors (limit clamped to 1–20)
 - Returns markdown-formatted results with score, question, answer, source
@@ -113,7 +129,7 @@ Final: exec gosu hcli "$@"  →  drops to hcli, runs CMD (mcp_server.py)
 
 ### 2.4 `Dockerfile`
 
-Multi-stage build on `debian:12-slim` (configurable via `CORE_BASE_IMAGE` ARG).
+Single-stage build on `debian:12-slim` (configurable via `CORE_BASE_IMAGE` ARG).
 
 **Layer order:**
 1. System packages — network tools (nmap, dig, traceroute, mtr, tcpdump, whois,
@@ -134,9 +150,13 @@ Multi-stage build on `debian:12-slim` (configurable via `CORE_BASE_IMAGE` ARG).
 | `mcp[cli]` | >=1.26,<2 | FastMCP framework (both servers) |
 | `fastembed` | >=0.5,<1 | Local embedding model (memory server) |
 | `qdrant-client` | >=1.12,<2 | Vector DB client (memory server) |
+| `redis` | >=5,<6 | Audit event publishing (mcp server) |
+| `paramiko` | >=3,<4 | SSH transport (available for shell commands) |
+| `junos-eznc` | >=2.7,<3 | JunOS device access (available for shell commands) |
+| `httpx` | >=0.27,<1 | HTTP client (available for shell commands) |
 
 Additionally, `hcli_logging` is installed from `shared/` at build time (not in
-requirements.txt).
+requirements.txt). `h-ssh` requirements are installed separately from `/app/h-ssh/requirements.txt`.
 
 ---
 
@@ -191,12 +211,13 @@ After core returns, the result flows back through Claude Code CLI → dispatcher
 
 | Tool | Caller | Via | What arrives |
 |------|--------|-----|--------------|
-| `run_command` | Claude Code CLI | firewall.py → SSE :8083 | Single `command` string, already cleared by pattern denylist + Haiku gate |
-| `memory_search` | Claude Code CLI | memory_proxy.py → SSE :8084 | `query` string + optional `limit` int |
+| `run_command` | Claude Code CLI | firewall.py → SSE :8083 | `command` string (cleared by firewall) + optional `task_id` for audit correlation |
+| `memory_search` | Claude Code CLI | memory_proxy.py → SSE :8084 | `query` string + optional `collection` string + optional `limit` int |
 
-**We never see:** task_id, chat_id, user_id, session history, original user
+**We never see:** chat_id, user_id, session history, original user
 message, HMAC keys, Redis state, or any task metadata. The firewall strips
-all context — we receive only the tool arguments.
+all context — we receive only the tool arguments. `task_id` is an opaque
+identifier used solely for audit event correlation via Redis pub/sub.
 
 ### 3.3 What we hand back
 
@@ -225,7 +246,7 @@ stores in Redis for telegram-bot to deliver.
 | Contract | Consumer | What we guarantee |
 |----------|----------|-------------------|
 | MCP SSE on :8083 | Orchestration (firewall.py) | `run_command` accepts any string, returns exit code + output, never raises |
-| MCP SSE on :8084 | Orchestration (memory_proxy.py) | `memory_search` accepts query + limit, returns markdown or error string, never raises |
+| MCP SSE on :8084 | Orchestration (memory_proxy.py) | `memory_search` accepts query + optional collection + limit, returns markdown or error string, never raises |
 | Output truncation | Orchestration | Output capped at 500KB — consumer will never receive unbounded data |
 | Audit trail | Operations | Every command logged: command_exec (before), command_result (after, including timeouts and errors) |
 | Healthcheck | Docker | SSE endpoint on :8083 responds within 2s |
@@ -318,13 +339,14 @@ firewall.py (Orchestration) ──► SSE /sse (port 8083)
 memory_proxy.py (Orchestration) ──► SSE /sse (port 8084)
                                        │
                                        ▼
-                                FastMCP routes to memory_search(query, limit)
+                                FastMCP routes to memory_search(query, collection, limit)
                                        │
+                                       ├─ Resolve target collection (explicit or default)
                                        ▼
                                 fastembed.embed(query) → 384-dim vector
                                        │
                                        ▼
-                                qdrant.search(collection="hcli_memory", vector, limit)
+                                qdrant.search(collection=target, vector, limit)
                                        │
                                        ▼
                                 Format results as markdown (score, Q, A, source)
@@ -345,7 +367,7 @@ entrypoint.sh (runs as root)
   ├─ Copy SSH keys from read-only staging mount
   ├─ Build /etc/sudoers.d/hcli from SUDO_COMMANDS
   ├─ Set up SIGTERM/SIGINT trap for memory server cleanup
-  ├─ Healthcheck Qdrant → start memory_server.py (supervised background, as hcli)
+  ├─ Start memory_server.py (supervised background, as hcli)
   │
   ▼
 exec gosu hcli python3 -u mcp_server.py  (PID 1, as hcli)
@@ -376,6 +398,9 @@ exec gosu hcli python3 -u mcp_server.py  (PID 1, as hcli)
 | `QDRANT_HOST` | For memory | `h-cli-qdrant` | `memory_server.py` |
 | `QDRANT_PORT` | For memory | `6333` | `memory_server.py` |
 | `QDRANT_API_KEY` | For memory | — | `memory_server.py`, `entrypoint.sh` |
+| `QDRANT_COLLECTION` | No | `hcli_memory` | `memory_server.py` (legacy single-collection) |
+| `QDRANT_COLLECTIONS` | No | — | `memory_server.py` (comma-separated multi-collection) |
+| `COLLECTIONS_DIR` | No | `/app/data/collections` | `memory_server.py` (JSONL data root) |
 | `SUDO_COMMANDS` | No | — | `entrypoint.sh` |
 | `LOG_DIR` | No | `/var/log/hcli` | `entrypoint.sh` |
 | `LOG_LEVEL` | No | `INFO` | `hcli_logging` |
@@ -411,20 +436,33 @@ denylist + Haiku gate) in the Orchestration container. Core does not
 re-validate — that would duplicate the enforcement point and create conflicting
 rulesets.
 
-### 7.3 Output truncation
+### 7.3 Env output redaction
+When the executed command is a bare `env`, `printenv`, or `export` (with no arguments
+or only flags), all values in `KEY=VALUE` lines are replaced with `[REDACTED]` before
+any other processing. This is a pre-sanitization step that runs before the pattern-based
+sanitizer. Claude only needs variable names (it uses `$VAR_NAME` in commands and the
+shell expands them at runtime). Commands that merely contain "env" as a substring
+(e.g. `cat .env`, `envsubst`) are not affected — only exact env-listing commands trigger
+this redaction. The redaction is logged via the standard logger.
+
+### 7.4 Output truncation
 500 KB hard cap prevents oversized tool responses from exhausting LLM context.
 Original output length is captured before truncation and preserved in the
 audit log. Truncation is flagged in both the return value and audit entry.
 
-### 7.4 Lazy initialization for memory server
+### 7.5 Lazy initialization and multi-collection loading
 Qdrant client and embedding model are initialized once at startup via `_init()`,
-not per-request. The globals `_qdrant` and `_embedder` are `None` until init
-succeeds, providing a clean "not initialized" error path. If init fails
-partway (e.g. embedder download fails after Qdrant connects), the cleanup
-handler closes the Qdrant client and resets both globals to `None` — no
-dangling connections.
+not per-request. The globals `_qdrant`, `_embedder`, and `_available_collections`
+are `None`/empty until init succeeds, providing a clean "not initialized" error path.
+After connecting, `_init()` loads data for each configured collection from JSONL files
+in `data/collections/{name}/`. Collections support both pre-embedded vectors (any
+dimension, auto-detected from data) and raw text (embedded at load time with MiniLM).
+Loading is idempotent — content-hash-based point IDs prevent duplicates on re-run,
+and a `.loaded` marker file skips reload when no JSONL files have changed. If init
+fails partway, the cleanup handler closes the Qdrant client and resets all globals
+— no dangling connections.
 
-### 7.5 Unconditional memory server startup
+### 7.6 Unconditional memory server startup
 `entrypoint.sh` always starts `memory_server.py` in the background.
 `memory_server.py` handles Qdrant unavailability gracefully: if `_init()`
 fails (missing API key, unreachable Qdrant, model download error), the
@@ -433,18 +471,18 @@ exception is caught and the MCP server still starts on :8084. The
 This ensures port 8084 is always listening, preventing "can't reach" errors
 in the orchestration layer.
 
-### 7.6 SSH key staging pattern
+### 7.7 SSH key staging pattern
 SSH keys are mounted read-only at `/tmp/ssh-keys-staging` and copied to
 `/home/hcli/.ssh/` at startup. This avoids permission issues from Docker
 bind mounts while keeping the source keys immutable.
 
-### 7.7 Sudo whitelist approach
+### 7.8 Sudo whitelist approach
 Rather than granting blanket root access, `entrypoint.sh` dynamically builds a
 sudoers file from the `SUDO_COMMANDS` env var. Each command is resolved to its
 absolute path via `command -v`. Dangerous argument patterns are blocked
 separately by the Asimov firewall's denylist (see section 3.4).
 
-### 7.8 Process model
+### 7.9 Process model
 - **PID 1**: `mcp_server.py` (via `exec gosu hcli`)
 - **Background**: `memory_server.py` (via `gosu hcli ... &`, supervised)
 
@@ -452,7 +490,7 @@ If the command server crashes, the container restarts (PID 1 exit). The memory
 server is supervised: a trap forwards SIGTERM/SIGINT to the background PID on
 shutdown, and a monitor subshell logs unexpected exits.
 
-### 7.9 Logging strategy
+### 7.10 Logging strategy
 Both servers use the shared `hcli_logging` library which writes JSON-lines to:
 - `$LOG_DIR/core/app.log` — general application logs (DEBUG+)
 - `$LOG_DIR/core/error.log` — warnings and errors only (WARNING+)
@@ -460,7 +498,7 @@ Both servers use the shared `hcli_logging` library which writes JSON-lines to:
 
 Logs are rotated at 10 MB with 5 backup files.
 
-### 7.10 Concurrency limit
+### 7.11 Concurrency limit
 `run_command` is gated by a `threading.Semaphore(5)`. Non-blocking acquire
 rejects excess requests immediately with an audit-logged busy error. The
 semaphore is released in a `finally` block to prevent leaks on any exit path

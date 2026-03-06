@@ -25,11 +25,13 @@ Redis usage is fragmented. Each component invented its own keys, some publish ev
 graph TB
     subgraph External
         TG[Telegram]
-        SL[Slack — future]
+        SL[Slack]
+        DC[Discord]
+        WEB[Web UI]
     end
 
     subgraph "h-cli Platform"
-        BOT[Bot<br/>telegram-bot]
+        BOT[Interface Bots]
         DISP[Dispatcher<br/>claude-code]
         FW[Firewall Proxy]
         CORE[Core<br/>MCP Server]
@@ -40,7 +42,9 @@ graph TB
     end
 
     TG <-->|messages| BOT
-    SL <-.->|future| BOT
+    SL <-->|messages| BOT
+    DC <-->|messages| BOT
+    WEB <-->|messages| BOT
 
     BOT -->|LPUSH task| REDIS
     BOT -->|PUBLISH abort| REDIS

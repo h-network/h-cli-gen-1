@@ -4,7 +4,7 @@
 
 The orchestration module is the task tracker and dispatcher of h-cli. It routes messages between interfaces (`interfaces/`) and the LLM worker (`llm/claude-code/`) via Redis, manages task lifecycle with a full state machine, and handles session continuity.
 
-Split into three files: `bus.py` (Redis task lifecycle), `worker.py` (Claude invocation), `dispatcher.py` (thin main loop).
+Split into three files: `bus.py` (Redis task lifecycle), `worker.py` (Claude invocation), `dispatcher.py` (concurrent dispatch loop).
 
 ## Module Structure
 
@@ -12,7 +12,7 @@ Split into three files: `bus.py` (Redis task lifecycle), `worker.py` (Claude inv
 orchestration/          ← this module
   bus.py                ← Redis task lifecycle, state machine, HMAC, key constants, metrics, crash recovery
   worker.py             ← Claude invocation, prompt building, skills, sessions, idle sweep
-  dispatcher.py         ← Thin BLPOP loop, signal handling, heartbeat
+  dispatcher.py         ← Concurrent BLPOP loop, thread pool, per-chat serialization, signal handling
   LLD.md                ← this file
 ```
 
@@ -48,16 +48,24 @@ Everything related to executing a task.
 
 **Abort support:** `run_task` receives `abort_event` (threading.Event) and `proc_ref` (mutable list). Sets `proc_ref[0]` to the Popen handle after spawning Claude, so the bus control thread can kill it on abort. Checks `abort_event` after `proc.communicate()` returns.
 
-### dispatcher.py — Main Loop
+### dispatcher.py — Concurrent Main Loop
 
-Thin entry point (~100 lines). Connects bus and worker.
+Entry point with thread pool for parallel task execution.
+
+**Concurrency model:**
+- `ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TASKS)` runs tasks in parallel
+- `threading.Semaphore(MAX_CONCURRENT_TASKS)` gates the BLPOP loop — won't pop a task unless a slot is free
+- Per-chat serialization via `threading.Lock` per `chat_id` — tasks from the same chat run sequentially to protect session history
+- `MAX_CONCURRENT_TASKS=1` behaves identically to the original serial dispatcher
 
 **Flow:**
-1. Create TaskBus, connect, recover orphaned tasks
-2. BLPOP `hcli:tasks` (30s timeout)
-3. On timeout: sweep idle sessions, loop
-4. On task: validate → set state `running` → subscribe control channel → `worker.run_task()` → determine final state → store result → write metrics → store memory → unsubscribe control → loop
-5. On SIGTERM: finish current task, exit
+1. Create TaskBus, connect, recover orphaned tasks, create thread pool
+2. Acquire semaphore (blocks if all slots busy)
+3. BLPOP `hcli:tasks` (30s timeout)
+4. On timeout: release semaphore, sweep idle sessions, loop
+5. On task: validate → submit `_handle_task()` to pool → loop immediately
+6. `_handle_task()` (in worker thread): acquire per-chat lock → set state `running` → subscribe control → `worker.run_task()` → determine final state → store result → write metrics → store memory → unsubscribe control → release chat lock → release semaphore
+7. On SIGTERM: `executor.shutdown(wait=True)` — finishes all in-flight tasks before exit
 
 ## Container Path Mapping
 
@@ -102,14 +110,14 @@ On startup, `bus.recover_orphaned_tasks()` SCANs for `hcli:task:*:state` keys wi
 
 ### Control Channel (abort)
 
-`bus.subscribe_control()` starts a daemon thread that subscribes to `hcli:control:{task_id}`. On `{"action": "abort"}` message:
+`bus.subscribe_control(task_id, ...)` starts a daemon thread per task that subscribes to `hcli:control:{task_id}`. On `{"action": "abort"}` message:
 1. Sets `abort_event` (threading.Event)
 2. Kills the Claude process group via `os.killpg(proc.pid, SIGKILL)`
 3. Thread exits
 
 The worker's `proc.communicate()` returns (process died), checks `abort_event`, returns abort result. Dispatcher sets state to `aborted`.
 
-Uses `pubsub.get_message(timeout=1.0)` in a loop with a stop event, so `unsubscribe_control()` can cleanly shut down the thread within ~1 second.
+Control threads are tracked in `TaskBus._control_threads` dict keyed by `task_id`, protected by a lock. `unsubscribe_control(task_id)` cleanly shuts down the specific listener within ~1 second.
 
 ## Redis Key Namespace
 
@@ -185,11 +193,79 @@ Per HLD section 9:
 
 Validation in `bus.validate_task()`: rejects missing task_id or message (sets state=failed). Warns on missing chat_id/user_id but allows through for backward compatibility.
 
+## Concurrency
+
+### Thread Pool
+
+The dispatcher uses `ThreadPoolExecutor` with `MAX_CONCURRENT_TASKS` workers. A `threading.Semaphore` gates the BLPOP loop: the main thread only pops a task when a slot is free, preventing unbounded memory growth.
+
+### Per-Chat Serialization
+
+Tasks from the same `chat_id` are serialized via per-chat `threading.Lock`s. This prevents:
+- Interleaved `RPUSH` to session history (corrupted turn ordering)
+- Concurrent `manage_session()` triggering double chunk dumps
+- Race conditions on session size tracking
+
+Tasks from different chat_ids run fully in parallel.
+
+### Thread-Safety Guarantees
+
+| Component | Thread-safe? | Mechanism |
+|-----------|-------------|-----------|
+| `bus.r` (Redis) | Yes | `redis-py` internal connection pool |
+| `bus.set_state()` | Yes | Per-key Redis SET, no shared state |
+| `bus.write_metrics()` | Yes | Independent pipeline per call; HINCRBY is atomic |
+| `bus.subscribe_control()` | Yes | Per-task dict with lock |
+| `bus.store_result()` | Yes | Per-key Redis SET |
+| `bus._get_pg_pool()` | Yes | Double-checked lock; `ThreadedConnectionPool` |
+| `worker.run_task()` | Yes | All state is local; subprocess is independent |
+| `worker.sweep_idle_sessions()` | Main thread only | Called on BLPOP timeout, never from pool |
+
+### Graceful Shutdown
+
+SIGTERM sets `_shutdown` flag. Main loop stops popping tasks. `executor.shutdown(wait=True)` blocks until all in-flight tasks complete. Upper bound: `TASK_TIMEOUT` (each task has its own timeout).
+
+## Conversation Auto-Indexing
+
+`maintenance.sh` (repo root) extracts completed conversations from the audit log and writes them to Qdrant's collection directory for auto-indexing.
+
+### Pipeline
+
+```
+logs/claude/audit.log (JSONL)
+  → maintenance.sh (correlate task_started + task_completed by task_id)
+  → data/collections/conversations/conversations_YYYY-MM-DD.jsonl (Q&A pairs, per-date files)
+  → Core auto-indexes on restart (MiniLM embedding → Qdrant)
+```
+
+### How it works
+
+1. Reads `logs/claude/audit.log` from last processed byte offset
+2. Parses JSONL: correlates `task_started` entries (has `user_message`) with `task_completed` entries (has `output`) by `task_id`
+3. Filters: skips errors/aborts/timeouts, skips short answers (< 50 chars)
+4. Appends Q&A pairs to per-date files (`conversations_YYYY-MM-DD.jsonl`)
+5. Saves byte offset to `.last_offset` marker file
+
+### Idempotency
+
+- Tracks byte offset in `data/collections/conversations/.last_offset`
+- Handles log rotation: if file size < saved offset, resets to 0
+- Safe to run on cron — only processes new entries
+
+### Output format
+
+```json
+{"question": "show me the BGP status on router-01", "answer": "Here are the BGP neighbors...", "source": "conversation:2026-03-06"}
+```
+
+Core loads `data/collections/conversations/*.jsonl`, embeds the `question` field with MiniLM, and stores in Qdrant. The `memory_search` MCP tool can then retrieve relevant past conversations.
+
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `REDIS_URL` | `redis://redis:6379` | Redis connection |
+| `MAX_CONCURRENT_TASKS` | `3` | Thread pool size and semaphore limit |
 | `TASK_TIMEOUT` | `600` | Max seconds per task |
 | `SESSION_TTL` | `28800` (8h) | Redis session key TTL |
 | `HISTORY_TTL` | `86400` (24h) | Conversation history TTL |

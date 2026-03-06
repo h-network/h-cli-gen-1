@@ -42,7 +42,7 @@ class RestTransport(BaseTransport):
         self._base_url = host.rstrip("/")
         headers = {}
         if password:
-            headers = _resolve_auth(user, password)
+            headers = _resolve_auth(user or "bearer", password)
         self._client = httpx.Client(
             base_url=self._base_url,
             headers=headers,

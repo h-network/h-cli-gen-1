@@ -63,7 +63,7 @@ _CHAT_ID_RE = re.compile(r"^-?\d+$")
 
 
 def _validate_chat_id(chat_id) -> bool:
-    """Validate chat_id is a numeric Telegram ID (no path traversal)."""
+    """Validate chat_id is a numeric ID (no path traversal)."""
     return bool(_CHAT_ID_RE.match(str(chat_id)))
 
 
@@ -79,7 +79,7 @@ def _load_base_prompt() -> str:
             logger.debug("Prompt file not found, skipping: %s", path)
     if not parts:
         parts.append(
-            "You are h-cli, a Telegram assistant. "
+            "You are h-cli, an AI engineering assistant. "
             "Use the available MCP tools to fulfill the user's request. "
             "Be concise. Return just the relevant output."
         )

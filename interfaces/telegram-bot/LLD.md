@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Single-file async Python service (`bot.py`) that acts as the user-facing front door to h-cli. It receives messages via the Telegram Bot API (long-polling), queues tasks to Redis, polls for results from the orchestration layer, and renders responses back to the user. It is stateless itself — all persistent state lives in Redis.
+Single-file async Python service (`bot.py`) that acts as the user-facing front door to h-cli. It receives messages via the Telegram Bot API (long-polling), queues tasks to Redis, subscribes for result notifications from the orchestration layer, and renders responses back to the user. It is stateless itself — all persistent state lives in Redis.
 
 ## 2. Position in System Flow
 
@@ -26,8 +26,8 @@ User ──►│ task JSON │──►Redis──► dispatcher ──► ... 
 
 | Artifact | Consumer | Format | Redis Key / Path |
 |---|---|---|---|
-| Task JSON | Orchestration (dispatcher) | JSON string with `task_id`, `message`, `user_id`, `chat_id`, `submitted_at`, `model` | `hcli:tasks` (RPUSH) |
-| Pending task tracking | Self (for `/cancel`) | task_id string | `hcli:pending:{chat_id}` (RPUSH) |
+| Task JSON | Orchestration (dispatcher) | JSON string with `task_id`, `message`, `user_id`, `chat_id`, `submitted_at`, `model`, `source` | `hcli:tasks` (RPUSH) |
+| Per-chat task tracking | Self (for `/cancel` and `/abort`) | task_id string | `hcli:chat:{chat_id}:tasks` (RPUSH) |
 | Session chunk files | Orchestration (Tier 2 context injection) | Plain text — header + timestamped turns | `/var/log/hcli/sessions/{chat_name}/chunk_{timestamp}.txt` |
 | Teach mode turns | Self (for skill generation prompt) | JSON strings in Redis list | `hcli:teach:{chat_id}:turns` |
 
@@ -36,11 +36,13 @@ User ──►│ task JSON │──►Redis──► dispatcher ──► ... 
 | Artifact | Producer | Format | Redis Key |
 |---|---|---|---|
 | Signed result | Orchestration (dispatcher) | JSON with `output`, `completed_at`, `usage`, `hmac` | `hcli:results:{task_id}` (GET, then DELETE) |
+| Result notification | Orchestration (dispatcher) | Any message on channel | `hcli:task:{task_id}:notify` (SUBSCRIBE) |
+| Task state | Orchestration (dispatcher) | State string | `hcli:task:{task_id}:state` (GET, for activity idle check) |
 | Session UUID | Orchestration (dispatcher) | UUID string | `hcli:session:{chat_id}` (cleared by `/new`) |
 | Session history | Orchestration (dispatcher) | JSON turn objects in list | `hcli:session_history:{chat_id}` (read + delete on `/new`) |
 | Session byte counter | Orchestration (dispatcher) | Integer string | `hcli:session_size:{chat_id}` (cleared by `/new`) |
 | Daily stats | Orchestration (dispatcher) | Hash with counters | `hcli:stats:{YYYY-MM-DD}` (read-only) |
-| Audit events | Orchestration (dispatcher) | JSON with `command`, `status`, `duration_s` | `hcli:audit:{task_id}` (SUBSCRIBE) |
+| Audit events | Orchestration (dispatcher) | JSON with `command`, `status`, `duration_ms` | `hcli:audit:{task_id}` (SUBSCRIBE) |
 
 ### 2.3 Session Chunking Handoff
 
@@ -68,9 +70,7 @@ telegram-bot (_dump_session_chunk)              Orchestration (dump_session_chun
                                           (Tier 2 context injection)
 ```
 
-**Note**: Two independent implementations exist — async in `bot.py` (L438–473), sync in `orchestration/dispatcher.py` (L308–348). Same file format, same Redis cleanup. This is a refactoring candidate for a shared utility, but works correctly as-is.
-
-**Chunk file format** (written by `_dump_session_chunk`, L440–473):
+**Chunk file format** (written by `_dump_session_chunk`, L453–488):
 
 ```
 === h-cli session chunk ===
@@ -107,20 +107,21 @@ interfaces/telegram-bot/
 
 | Section (line range) | Purpose |
 |---|---|
-| Config (30–79) | Env var loading, constants, Redis key prefixes |
-| Action system (81–140) | Regex-based `[action:type:payload]` extraction and dispatch |
-| Model toggle (142–150) | Per-chat model preference (haiku/opus) + keyboard layout |
-| HMAC verification (153–160) | Verify result integrity via SHA-256 HMAC |
-| Helpers (163–295) | `authorized()`, `markdown_to_telegram_html()`, `send_long()`, `_redis()` |
-| Auth wrapper (298–311) | `@auth_required` decorator — fail-closed allowlist check |
-| Command handlers (314–584) | `/start`, `/help`, `/status`, `/stats`, `/skills`, `/new`, `/cancel`, `/abort`, `/run` |
-| Task queueing (537–576) | `_queue_task()` — concurrency check, Redis RPUSH, spawn poller |
-| Result polling (588–658) | `_poll_result()` — async loop, HMAC verify, teach buffering, send response |
-| Keyboard handler (662–761) | Model toggle, stats, skills, teach mode start/end, verbose toggle |
-| Message handler (764–770) | Catch-all for natural language — forwards to `_queue_task()` |
-| Photo handler (773–803) | Download photo, base64 encode, save to disk, queue with data URI |
-| App lifecycle (806–828) | `post_init` (Redis pool), `post_shutdown` (pool cleanup) |
-| Main (831–861) | Handler registration, `run_polling()` |
+| Config (34–95) | Env var loading, constants, Redis key prefixes, background task set |
+| Action system (97–157) | Regex-based `[action:type:payload]` extraction and dispatch |
+| Model toggle (159–177) | Per-chat model preference (haiku/opus) + keyboard layout + HMAC verify |
+| Helpers (179–313) | `authorized()`, `markdown_to_telegram_html()`, `send_long()`, `_redis()` |
+| Auth wrapper (315–329) | `@auth_required` decorator — fail-closed allowlist check |
+| Command handlers (331–580) | `/start`, `/help`, `/status`, `/stats`, `/skills`, `/new`, `/cancel`, `/abort`, `/run` |
+| Activity stream (582–726) | `_format_activity()`, `_stream_activity()` — live command feed via editable message |
+| Task queueing (728–777) | `_queue_task()` — concurrency check, Redis RPUSH, spawn poller |
+| Result polling (779–936) | `_poll_result()` — subscribe + GET fallback, HMAC verify, teach buffering, send response |
+| Keyboard handler (938–1048) | Model toggle, stats, skills, teach mode start/end, verbose toggle |
+| Message handler (1050–1056) | Catch-all for natural language — forwards to `_queue_task()` |
+| Photo handler (1058–1084) | Download photo, base64 encode, save to disk, queue with data URI |
+| Location handler (1087–1097) | Extract coordinates, queue as text |
+| App lifecycle (1099–1131) | `post_init` (Redis pool), `post_shutdown` (pool cleanup) |
+| Main (1133–1164) | Handler registration, `run_polling()` |
 
 ## 4. Architecture
 
@@ -142,7 +143,8 @@ interfaces/telegram-bot/
 │                                  ▼    ▼                 │
 │                              Redis   _poll_result()     │
 │                                         │               │
-│                                GET loop │               │
+│                          SUBSCRIBE +    │               │
+│                          GET fallback   │               │
 │                                         ▼               │
 │                                    send_long()          │
 │                                      │    │             │
@@ -164,8 +166,8 @@ User ──▸ Telegram API ──▸ handle_message()
                               │
                      ┌────────┴────────┐
                      │                 │
-              RPUSH hcli:tasks    RPUSH hcli:pending:{chat_id}
-              (task JSON)         (task_id for cancel tracking)
+              RPUSH hcli:tasks    RPUSH hcli:chat:{chat_id}:tasks
+              (task JSON)         (task_id for cancel/abort tracking)
                      │
                      ▼
               asyncio.Task(_poll_result)
@@ -176,7 +178,8 @@ User ──▸ Telegram API ──▸ handle_message()
                firewall, core, signing)
               ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
                      │
-              GET hcli:results:{task_id}  (1s interval, up to TASK_TIMEOUT)
+              SUBSCRIBE hcli:task:{task_id}:notify
+              + GET hcli:results:{task_id} (10s fallback, up to TASK_TIMEOUT)
                      │
                      ▼ (result found)
               HMAC verify ──▸ extract usage stats ──▸ buffer teach turns (if active)
@@ -198,7 +201,8 @@ User ──▸ Telegram API ──▸ handle_message()
   "user_id":      12345,
   "chat_id":      67890,
   "submitted_at": "ISO-8601",
-  "model":        "opus | haiku"
+  "model":        "opus | haiku",
+  "source":       "telegram"
 }
 ```
 
@@ -239,8 +243,11 @@ cmd_new() ──▸ _dump_session_chunk()
 |---|---|---|---|---|---|
 | `hcli:tasks` | LIST | — | bot → dispatcher | bot writes, dispatcher reads | Task dispatch queue |
 | `hcli:results:{task_id}` | STRING | 600s | dispatcher → bot | dispatcher writes, bot reads | Task result + HMAC |
-| `hcli:pending:{chat_id}` | LIST | 2×TASK_TIMEOUT | bot ↔ bot | bot | Per-chat task tracking for `/cancel` and `/abort` |
-| `hcli:abort:{task_id}` | STRING | TASK_TIMEOUT | bot → dispatcher | bot writes, dispatcher reads | Abort signal — dispatcher kills subprocess on sight |
+| `hcli:chat:{chat_id}:tasks` | LIST | 2×TASK_TIMEOUT | bot ↔ bot | bot | Per-chat task tracking for `/cancel` and `/abort` |
+| `hcli:control:{task_id}` | PUBSUB | — | bot → dispatcher | bot publishes `{"action": "abort"}`, dispatcher subscribes | Abort signal — dispatcher kills subprocess |
+| `hcli:task:{task_id}:notify` | PUBSUB | — | dispatcher → bot | dispatcher publishes, bot subscribes | Result ready notification |
+| `hcli:task:{task_id}:state` | STRING | — | dispatcher → bot | dispatcher writes, bot reads during idle | Task state for activity stream idle check |
+| `hcli:audit:{task_id}` | PUBSUB | — | dispatcher → bot | dispatcher publishes, bot subscribes | Live command execution events |
 | `hcli:session:{chat_id}` | STRING | — | dispatcher → bot | dispatcher writes, bot deletes on `/new` | Session UUID |
 | `hcli:session_history:{chat_id}` | LIST | — | dispatcher → bot | dispatcher writes, bot reads + deletes on `/new` | Conversation turns (dumped to chunk) |
 | `hcli:session_size:{chat_id}` | STRING | — | dispatcher → bot | dispatcher writes, bot deletes on `/new` | Byte counter for chunk rotation |
@@ -314,25 +321,27 @@ In-memory dict `_chat_model[chat_id]` stores per-chat preference (`"haiku"` or `
 
 `_poll_result()` runs as a fire-and-forget `asyncio.Task` (stored in `_background_tasks` set to prevent GC).
 
-- Polls `GET hcli:results:{task_id}` every 1 second
+- Subscribes to `hcli:task:{task_id}:notify` via a dedicated Redis pub/sub connection
+- Performs an immediate `GET hcli:results:{task_id}` to catch results that arrived before the subscribe
+- Falls back to `GET` every `NOTIFY_POLL_FALLBACK` (10s) as a safety net
 - Verbose ON (default): spawns `_stream_activity` to show live command feed in an editable message; cancels it when result arrives
-- Verbose OFF: sends typing indicator every 5 seconds instead (silent wait)
-- Times out after `TASK_TIMEOUT` seconds (default 300)
+- Verbose OFF: sends typing indicator every 10s instead (silent wait)
+- Times out after `TASK_TIMEOUT` seconds (code default 300, docker-compose default 600)
 - On result: verifies HMAC, appends usage stats as HTML comment, sends response
 - Verbose mode toggled per-chat via `📡 Verbose` keyboard button
 
 ### 8.6 Activity Stream
 
-`/activity` subscribes to Redis pub/sub channel `hcli:audit:{task_id}` and streams command execution to a single editable Telegram message.
+`_stream_activity()` is called from `_poll_result()` when verbose mode is ON. It subscribes to Redis pub/sub channel `hcli:audit:{task_id}` and streams command execution to a single editable Telegram message.
 
 - Dedicated Redis connection for pub/sub (can't share with main pool)
-- Events expected as JSON: `{"command": "...", "status": "started"|"completed", "duration_s": float}`
-- On `started`: previous running command marked done, new entry added
-- On `completed`: matching entry updated with duration
+- Events expected as JSON: `{"command": "...", "status": "running"|"completed"|"failed", "duration_ms": float}`
+- On `running`: previous running command marked done, new entry added
+- On `completed`/`failed`: matching entry updated with duration
 - Shows last 8 commands, truncates at 60 chars
 - Rate-limits message edits to 1/second (Telegram throttle protection)
+- Checks `hcli:task:{task_id}:state` during idle to detect abort/completion early (every 5s)
 - Auto-stops after 30 seconds with no events (task likely finished)
-- Integrated into `_poll_result` — when verbose mode is ON, the queue message becomes a live activity stream; when OFF, no queue message at all
 - `_poll_result` cancels the stream task when the result arrives and edits the message to show done
 
 ### 8.7 Message Splitting
@@ -362,20 +371,21 @@ Keyboard buttons are matched by a `filters.Regex` handler registered before the 
 ## 10. Handler Registration Order
 
 ```python
-1. CommandHandler("start")     # /start
-2. CommandHandler("help")      # /help
-3. CommandHandler("status")    # /status
-4. CommandHandler("stats")     # /stats
-5. CommandHandler("new")       # /new
-6. CommandHandler("cancel")    # /cancel
-7. CommandHandler("abort")     # /abort — kill running task
-8. CommandHandler("run")       # /run <cmd>
-9. MessageHandler(Regex)       # keyboard buttons (matched first)
-10. MessageHandler(PHOTO)      # inbound photos → base64 data URI
-11. MessageHandler(TEXT)       # catch-all natural language
+1.  CommandHandler("start")     # /start
+2.  CommandHandler("help")      # /help
+3.  CommandHandler("status")    # /status
+4.  CommandHandler("stats")     # /stats
+5.  CommandHandler("new")       # /new
+6.  CommandHandler("cancel")    # /cancel
+7.  CommandHandler("abort")     # /abort — kill running task
+8.  CommandHandler("run")       # /run <cmd>
+9.  MessageHandler(Regex)       # keyboard buttons (matched first)
+10. MessageHandler(PHOTO)       # inbound photos → base64 data URI
+11. MessageHandler(LOCATION)    # inbound locations → coordinates text
+12. MessageHandler(TEXT)        # catch-all natural language
 ```
 
-Order matters: keyboard button regex is registered before the generic text handler to prevent buttons from being queued as tasks. Photo handler is registered before the text handler.
+Order matters: keyboard button regex is registered before the generic text handler to prevent buttons from being queued as tasks. Photo and location handlers are registered before the text handler.
 
 ## 11. External Dependencies
 
@@ -404,6 +414,7 @@ Uses `hcli_logging` shared library. Two logger instances:
 | `task_cancelled` | user_id, task_id | `/cancel` |
 | `task_aborted` | user_id, task_id | `/abort` |
 | `task_timeout` | user_id, task_id, timeout | Poll loop exhausted |
+| `task_redis_error` | user_id, task_id | Redis connection lost during poll |
 | `hmac_failed` | task_id | Result signature mismatch |
 | `teach_start` | user_id, chat_id | Teach mode activated |
 | `teach_end` | user_id, chat_id, turns | Teach mode ended |
@@ -417,7 +428,7 @@ Uses `hcli_logging` shared library. Two logger instances:
 | `RESULT_HMAC_KEY` | yes | — | Shared HMAC secret (generated by install.sh) |
 | `REDIS_URL` | no | `redis://redis:6379` | Redis connection string |
 | `MAX_CONCURRENT_TASKS` | no | `3` | Queue depth limit |
-| `TASK_TIMEOUT` | no | `300` | Poll timeout in seconds |
+| `TASK_TIMEOUT` | no | `300` (code) / `600` (docker-compose) | Poll timeout in seconds |
 | `CHAT_NAMES` | no | — | `chat_id:name,...` for session chunk dirs |
 | `SESSION_CHUNK_DIR` | no | `/var/log/hcli/sessions` | Session dump directory |
 | `GRAFANA_URL` | no | — | External Grafana base URL |
@@ -427,12 +438,36 @@ Uses `hcli_logging` shared library. Two logger instances:
 | `LOG_DIR` | no | `/var/log/hcli` | Log output directory |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
 
-## 14. Design Decisions
+## 14. Deployment
+
+### Compose Profile
+
+The telegram-bot service is behind the `telegram` compose profile. It only starts when `COMPOSE_PROFILES` includes `telegram`:
+
+```yaml
+profiles: ["telegram"]
+```
+
+Enable via `setup.sh` (interactive) or manually in `.env`:
+```
+COMPOSE_PROFILES=telegram
+```
+
+### setup.sh Integration
+
+When the user selects Telegram (option 1) during `setup.sh`, the script:
+1. Prompts for `TELEGRAM_BOT_TOKEN` (skips if already set)
+2. Prompts for `ALLOWED_CHATS` (comma-separated chat IDs)
+3. Prompts for friendly names per chat ID (`CHAT_NAMES`)
+4. Adds `telegram` to `COMPOSE_PROFILES`
+
+## 15. Design Decisions
 
 | Decision | Rationale |
 |---|---|
-| Single-file `bot.py` | Module is small enough (~825 lines) that splitting adds indirection without clarity. All concerns are separated by sections. |
+| Single-file `bot.py` | Module is ~1,165 lines. All concerns are separated by sections with clear markers. |
 | Fire-and-forget polling tasks | Allows the bot to remain responsive while waiting for results. `_background_tasks` set prevents GC. |
+| Subscribe + GET fallback for results | Subscribe provides instant notification; GET fallback (every 10s) handles missed pub/sub messages. Immediate GET on subscribe covers race conditions. |
 | Placeholder-based markdown converter | Prevents double-escaping of code blocks/tables. Simpler than a full parser for the subset Telegram supports. |
 | In-memory model toggle | Ephemeral by design — no persistence needed. Users can re-select after restart. |
 | HMAC on results | Ensures the dispatcher (separate container) produced the result, not a rogue Redis writer. |
@@ -440,3 +475,4 @@ Uses `hcli_logging` shared library. Two logger instances:
 | Action markers in response text | Decouples LLM output format from bot rendering. Bot strips markers, sends text, then executes side effects. Extensible via `_ACTION_HANDLERS` dict. |
 | Stats as expandable blockquote | Shows usage data without cluttering the main response. Telegram's expandable blockquote keeps it collapsed by default. |
 | Chunk files as plain text | Human-readable, greppable, no parser needed. Orchestration reads them as raw text into system prompt — binary format would add complexity for no benefit. |
+| Pub/sub abort via `hcli:control:{task_id}` | PUBLISH/SUBSCRIBE is more reliable than a STRING key that must be polled. Dispatcher receives abort signal instantly. |

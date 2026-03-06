@@ -37,9 +37,11 @@ hssh_llm/
 │   │   └── audit.py               # Edit operation JSONL audit logger
 │   ├── transports/
 │   │   ├── __init__.py
-│   │   ├── junos.py               # Juniper NETCONF (junos-eznc / PyEZ)
-│   │   ├── arista.py              # Arista eAPI (pyeapi)
+│   │   ├── junos.py               # Juniper hybrid: paramiko SSH (show) + PyEZ NETCONF (config)
+│   │   ├── arista.py              # Arista eAPI (stub — requires pyeapi)
 │   │   ├── generic.py             # Generic SSH (paramiko)
+│   │   ├── rest.py                # REST API transport (httpx) — for NetBox, LibreNMS, etc.
+│   │   ├── telnet.py              # Raw-socket telnet — Eve-NG consoles, legacy devices
 │   │   └── base.py                # Abstract transport interface
 │   └── commands/                  # Command shortcut library (.cmd files)
 │       ├── bgp.cmd
@@ -85,6 +87,7 @@ Single-file entry point that parses arguments, loads device targets, and dispatc
 | `--workers` | int | Parallel worker count, default 8 (existing) |
 | `--session-timeout` | int | SSH session timeout, default 30s (existing) |
 | `--command-timeout` | int | Per-command timeout, default 120s (existing) |
+| `--job` | path | JSON job file with per-device commands (use `-` for stdin) |
 | `--save-output` | path | Save per-device output to directory (existing) |
 
 **Exit codes:**
@@ -227,9 +230,11 @@ class BaseTransport(ABC):
 
 | Transport | File | Library | Auth | Edit Support |
 |-----------|------|---------|------|-------------|
-| `junos` | `junos.py` | junos-eznc (PyEZ) | SSH key or password | Full (NETCONF commit/rollback) |
-| `arista` | `arista.py` | pyeapi | Password required (eAPI) | Full (config session) |
+| `junos` | `junos.py` | paramiko + junos-eznc (PyEZ) | SSH key or password | Hybrid: paramiko for show, PyEZ NETCONF for config |
+| `arista` | `arista.py` | pyeapi (stub) | Password required (eAPI) | Stub — raises NotImplementedError |
 | `generic` | `generic.py` | paramiko | SSH key or password | Show-only (no structured edit) |
+| `rest` | `rest.py` | httpx | Bearer, Basic, X-Auth-Token, custom header | GET for show, PATCH/POST/PUT for edit |
+| `telnet-*` | `telnet.py` | stdlib socket | Username/password (login sequence) | IOS: config terminal; Junos: configure/commit |
 
 **Host key policy** (P2.1): All transports use `WarningPolicy()` instead of `AutoAddPolicy()`. System `known_hosts` is loaded first:
 ```python
@@ -516,11 +521,13 @@ This is critical for h-cli integration because the model often constructs device
 
 | Package | Version | Used By | Notes |
 |---------|---------|---------|-------|
-| `paramiko` | >=3.0, <4 | `generic.py` | SSH client (generic vendor transport) |
-| `junos-eznc` | >=2.7, <3 | `junos.py` | Juniper NETCONF (PyEZ) |
-| `pyeapi` | >=1.0, <2 | `arista.py` | Arista eAPI client |
+| `paramiko` | >=3.0 | `generic.py`, `junos.py` | SSH client |
+| `junos-eznc` | >=2.7.0 | `junos.py` | Juniper NETCONF (PyEZ) — config path |
+| `httpx` | >=0.27 | `rest.py` | REST API transport (thread-safe sync client) |
 
-No additional Python packages. All other functionality uses stdlib (`argparse`, `concurrent.futures`, `json`, `dataclasses`, `pathlib`, `logging`).
+`pyeapi` is not currently required — the Arista transport is a stub. `telnet.py` uses stdlib only (`socket`).
+
+No additional Python packages beyond the above. All other functionality uses stdlib (`argparse`, `concurrent.futures`, `json`, `dataclasses`, `pathlib`, `logging`).
 
 Installed in the Core container at build time via `pip install --no-cache-dir`.
 

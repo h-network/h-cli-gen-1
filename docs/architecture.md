@@ -1,17 +1,20 @@
 # Architecture
 
-Nine services across two isolated Docker networks, with optional profiles for monitoring, vector search, and security scanning.
+Twelve services across two isolated Docker networks, with optional profiles for monitoring, vector search, security scanning, and additional interfaces (web, Discord, Slack).
 
 ```
-     +-----------+        +----------------------------------------------------------+
-     |           |        |                                                          |
-     |  Telegram | -----> |  +-------------+    +-------+    +--------------+        |
-     |           | <----- |  | telegram-bot| -> | Redis | -> | claude-code  |        |
-     +-----------+        |  |             | <- |       | <- | (dispatcher) |        |
-                          |  +-------------+    +-------+    +------+-------+        |
-                          |   frontend only       bridges     |  both networks |
-                          |                            claude -p (MCP)         |
-                          |               session context           |           |
+  +-----------+
+  | Telegram  |---+
+  +-----------+   |
+  +-----------+   |      +----------------------------------------------------------+
+  |   Slack   |---+      |                                                          |
+  +-----------+   +----> |  +-------------+    +-------+    +--------------+        |
+  +-----------+   | <--- |  | interface   | -> | Redis | -> | claude-code  |        |
+  |  Discord  |---+      |  | bot         | <- |       | <- | (dispatcher) |        |
+  +-----------+   |      |  +-------------+    +-------+    +------+-------+        |
+  +-----------+   |      |   frontend only       bridges     |  both networks |
+  |  Web UI   |---+      |                            claude -p (MCP)         |
+  +-----------+           |               session context           |           |
                           |               (plain text inject)  +-----+------+    |
                           |                                  | firewall   |    |
                           |                                  | (MCP proxy)|    |
@@ -25,7 +28,7 @@ Nine services across two isolated Docker networks, with optional profiles for mo
                           +----------------------------------------------------------+
 ```
 
-**Flow**: User sends message in Telegram → telegram-bot queues to Redis → dispatcher invokes Claude Code with session context → Claude calls `run_command()` → Asimov firewall checks the command (pattern denylist + independent Haiku gate) → core executes → result signed with HMAC → delivered back to Telegram.
+**Flow**: User sends message via any interface (Telegram, Slack, Discord, or Web UI) → interface bot queues to Redis → concurrent dispatcher invokes Claude Code with session context → Claude calls `run_command()` → Asimov firewall checks the command (pattern denylist + independent LLM gate) → core executes → result signed with HMAC → delivered back to the originating interface.
 
 Session history is stored in Redis lists. Session chunks are written as plain text files. JSONL files are written automatically by Claude Code CLI as an audit trail but are never replayed into the context window.
 
@@ -33,7 +36,7 @@ Session history is stored in Redis lists. Session chunks are written as plain te
 
 Each `claude -p` invocation starts with a fresh session. Conversation continuity is maintained by injecting context as plain text, not by replaying JSONL sessions:
 
-1. **Redis session history** (< 24h): Recent turns stored in Redis, formatted as markdown (`[HH:MM] **ROLE**: content`), prepended to the user's message (30KB cap).
+1. **Redis session history** (< 24h): Recent turns stored in Redis, formatted as plain text (`[HH:MM] ROLE: content`), prepended to the user's message (30KB cap).
 2. **Session chunks** (> 24h): When accumulated size exceeds 100KB, the dispatcher dumps history to text files on disk. Up to 50KB of recent chunks are injected into the system prompt.
 3. **Skills** (per-message): Matched skill files from `skills/` injected into the system prompt (20KB budget).
 4. **Vector memory** (permanent, optional): Curated Q&A pairs in Qdrant, searchable via `memory_search` tool.
@@ -67,11 +70,14 @@ h-cli/
 ├── README.md
 │
 ├── interfaces/                 # User-facing frontends
-│   └── telegram-bot/           # Telegram bot plugin
-│       ├── Dockerfile
-│       ├── bot.py              # /start, /help, /new, /run, /cancel, /abort, /status, /stats
-│       ├── entrypoint.sh
-│       └── requirements.txt
+│   ├── telegram-bot/           # Telegram bot plugin (profile: telegram)
+│   │   ├── Dockerfile
+│   │   ├── bot.py              # /start, /help, /new, /run, /cancel, /abort, /status, /stats
+│   │   ├── entrypoint.sh
+│   │   └── requirements.txt
+│   ├── web/                    # Web UI plugin (profile: web)
+│   ├── discord-bot/            # Discord bot plugin (profile: discord)
+│   └── slack-bot/              # Slack bot plugin (profile: slack)
 │
 ├── orchestration/              # Task tracker and dispatcher
 │   ├── bus.py                  # Redis task lifecycle, state machine, HMAC signing

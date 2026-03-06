@@ -44,6 +44,27 @@ _SANITIZE_PATTERNS = [
 ]
 
 
+# Detect bare env-listing commands (env, printenv, export with no args or only flags)
+_ENV_CMD_RE = re.compile(
+    r"^\s*(env|printenv|export)\s*(-[a-zA-Z0-9]*\s*)*$"
+)
+
+
+def _is_env_listing(command: str) -> bool:
+    """Return True if command is a bare env/printenv/export (lists all env vars)."""
+    return bool(_ENV_CMD_RE.match(command.strip()))
+
+
+def _redact_env_output(text: str) -> str:
+    """Redact all values in KEY=VALUE lines (for env/printenv/export output).
+
+    Handles both KEY=value (env/printenv) and declare -x KEY="value" (export) formats.
+    """
+    text = re.sub(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", r"\1=[REDACTED]", text, flags=re.MULTILINE)
+    text = re.sub(r"^(declare -x [A-Za-z_][A-Za-z0-9_]*)=(.*)$", r"\1=[REDACTED]", text, flags=re.MULTILINE)
+    return text
+
+
 def _sanitize_output(text: str) -> tuple[str, int]:
     """Redact sensitive patterns from command output. Returns (text, redaction_count)."""
     if not SANITIZE_OUTPUT:
@@ -137,6 +158,11 @@ def run_command(command: str, task_id: str = "") -> str:
 
         if not output:
             output = "(no output)"
+
+        # Env-specific redaction — blanket redact all values for env-listing commands
+        if _is_env_listing(command):
+            output = _redact_env_output(output)
+            logger.info("Env output redacted for command: %s", command)
 
         # Sanitize before truncation — redact credentials from output
         output, redact_count = _sanitize_output(output)

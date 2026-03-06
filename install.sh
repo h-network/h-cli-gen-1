@@ -10,7 +10,7 @@ echo "=== h-cli Install ==="
 if [ ! -f .env ]; then
     cp .env.template .env
     echo "[*] Created .env from template — edit it with your tokens before starting."
-    echo "    nano $SCRIPT_DIR/.env"
+    echo "    vi $SCRIPT_DIR/.env"
     echo ""
 fi
 
@@ -104,11 +104,26 @@ if ! grep -q '^GRAFANA_ADMIN_PASSWORD=.\+' .env 2>/dev/null; then
     echo ""
 fi
 
+# Generate self-signed SSL certificate if none exists
+mkdir -p ssl
+if [ ! -f ssl/cert.pem ] || [ ! -f ssl/key.pem ]; then
+    echo "[*] Generating self-signed SSL certificate..."
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout ssl/key.pem -out ssl/cert.pem \
+        -subj "/CN=h-cli" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+        2>/dev/null
+    echo "[*] SSL certificate generated (10-year, self-signed)."
+    echo "    To use your own: replace ssl/cert.pem and ssl/key.pem"
+    echo ""
+else
+    echo "[*] SSL certificate already exists — skipping."
+fi
+
 # Create context.md from template if it doesn't exist
 if [ ! -f context.md ]; then
     cp llm/context.md.template context.md
     echo "[*] Created context.md from template — customize it to describe your deployment."
-    echo "    nano $SCRIPT_DIR/context.md"
+    echo "    vi $SCRIPT_DIR/context.md"
     echo ""
 fi
 
@@ -124,8 +139,8 @@ safe_chown() {
 }
 
 # Ensure log directories exist (uid 1000 = hcli user in claude-code container)
-mkdir -p logs/core logs/telegram logs/sessions logs/claude logs/firewall logs/memory logs/media
-safe_chown 1000:1000 logs/claude logs/firewall logs/sessions logs/telegram logs/memory logs/media
+mkdir -p logs/core logs/telegram logs/slack logs/discord logs/web logs/sessions logs/claude logs/firewall logs/memory logs/memory-proxy logs/media
+safe_chown 1000:1000 logs/claude logs/firewall logs/sessions logs/telegram logs/slack logs/discord logs/web logs/memory logs/memory-proxy logs/media
 
 # Persistent data directories (uid 1000 = hcli user in containers)
 mkdir -p -m 700 data/redis data/claude-credentials data/qdrant data/timescaledb data/grafana
@@ -161,7 +176,7 @@ echo ""
 echo "=== Done ==="
 echo ""
 echo "Next steps:"
-echo "  1. Edit .env with your tokens:  nano $SCRIPT_DIR/.env"
+echo "  1. Edit .env with your tokens:  vi $SCRIPT_DIR/.env"
 echo "  2. Add the public key to your servers:  ssh-copy-id -i $SCRIPT_DIR/ssh-keys/id_ed25519.pub user@host"
 echo "  3. Optional: set BACKUP_TARGET in .env for remote backups"
 echo "  4. Start services:              docker compose up -d"
