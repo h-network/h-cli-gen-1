@@ -36,19 +36,19 @@ The ground rules are loaded into two independent systems:
 
 1. **The main model's system prompt** — behavioral guidance. The agent can discuss the rules, reference them, reason about them. But testing proved it will not reliably enforce them on its own. (See [test case: gate vs prompt enforcement](test-cases/gate-vs-prompt-enforcement.md))
 
-2. **Haiku's gate prompt** — actual enforcement. Stateless, no conversation context, no memory. Sees only the ground rules and the raw command. The layered structure gives the gate a clear decision framework: identify which layer the command touches, check if it violates that layer or any layer below it.
+2. **LLM gate prompt** — actual enforcement. Stateless, no conversation context, no memory. Sees only the ground rules and the raw command. The layered structure gives the gate a clear decision framework: identify which layer the command touches, check if it violates that layer or any layer below it.
 
 The system prompt is documentation. The gate is enforcement. The layered model makes enforcement deterministic.
 
 ## Highlights
 
-- **Asimov firewall**: MCP proxy between Claude and core. Two layers: deterministic pattern denylist (always active, zero latency) + independent Haiku gate check (on by default, resistant to conversational prompt injection)
-- **Network isolation**: Two Docker networks — `h-network-frontend` and `h-network-backend`. Redis bridges both (designated message bus). Claude-code and Grafana are on both. Core is backend-only. Telegram-bot is frontend-only.
-- **Fail-closed auth**: `ALLOWED_CHATS` allowlist — empty = nobody gets in
+- **Asimov firewall**: MCP proxy between Claude and core. Two layers: deterministic pattern denylist (always active, zero latency) + independent LLM gate check (on by default, resistant to conversational prompt injection)
+- **Network isolation**: Two Docker networks — `h-network-frontend` and `h-network-backend`. Redis bridges both (designated message bus). Claude-code and Grafana are on both. Core is backend-only. All interface bots (telegram, slack, discord, web) are frontend-only.
+- **Fail-closed auth**: Every interface enforces auth before queueing tasks — `ALLOWED_CHATS` (Telegram), `ALLOWED_USERS` (Slack/Discord), HTTP Basic Auth (Web). Empty allowlists = nobody gets in.
 - **Non-root**: All containers run as `hcli` (uid 1000), not root
 - **Capabilities**: `NET_RAW`/`NET_ADMIN` on core only; `cap_drop: ALL` + `no-new-privileges` on telegram-bot and claude-code; `read_only` rootfs on telegram-bot
 - **Sudo whitelist**: only commands in `SUDO_COMMANDS` are allowed via sudo (resolved to full paths, fail-closed)
-- **HMAC-signed results**: Dispatcher signs, telegram-bot verifies. Prevents Redis result spoofing.
+- **HMAC-signed results**: Dispatcher signs, all interface bots verify. Prevents Redis result spoofing.
 - **Redis auth**: password-protected, 2GB memory cap, LRU eviction, RDB + AOF persistence
 - **Session chunking**: Auto-rotate at 100KB. Two injection budgets: 30KB Redis history (prepended to user message) + 50KB session chunks (injected into system prompt)
 - **Tool restriction**: Claude Code restricted to `mcp__h-cli-core__run_command` and `mcp__h-cli-memory__memory_search` only
@@ -95,7 +95,7 @@ Everything else is denied. Fail-closed — if a command isn't in the list, sudo 
 | Integration | Container | Access | Required scope |
 |-------------|-----------|--------|----------------|
 | NetBox | `core` | REST API (read) | Read-only API token recommended |
-| Grafana | `core`, `telegram-bot` | REST API (read, render) | Viewer role token recommended |
+| Grafana | `core`, all interface bots | REST API (read, render) | Viewer role token recommended |
 | EVE-NG | `core` | REST API (read/write) | Lab user credentials |
 
-Core holds NetBox and EVE-NG tokens exclusively. Grafana tokens are shared with telegram-bot for inline graph rendering (`[action:graph:URL]`).
+Core holds NetBox and EVE-NG tokens exclusively. Grafana tokens are shared with interface bots for inline graph rendering (`[action:graph:URL]`).
