@@ -2,6 +2,32 @@
   <img src="docs/gifs/h-cli-mascot.png" width="400" alt="h-cli mascot">
 </p>
 
+  <p align="center">
+    <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+    <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python 3.11+"></a>
+    <a href="https://docs.docker.com/compose/"><img src="https://img.shields.io/badge/Docker-Compose-2496ED.svg" alt="Docker"></a>
+    <a href="https://github.com/h-network/h-cli/stargazers"><img src="https://img.shields.io/github/stars/h-network/h-cli" alt="Stars"></a>
+    <a href="https://github.com/h-network/h-cli/commits"><img src="https://img.shields.io/github/last-commit/h-network/h-cli" alt="Last commit"></a>
+    <a href="https://github.com/h-network/h-cli/blob/main/docs/SECURITY-HARDENING.md"><img src="https://img.shields.io/badge/Security-Asimov%20Firewall-red.svg" alt="Asimov Firewall"></a>
+  </p>
+  
+<h2 align="center">Why h-cli?</h2>
+
+  <div align="center">
+
+  | Feature | h-cli | Others |
+  |---------|-------|--------|
+  | Fully offline | ✅ Data never leaves your network | ❌ Cloud-dependent |
+  | Kill switch | ✅ Instant Pub/Sub abort | ❌ Close the tab |
+  | Crash recovery | ✅ Automatic on restart | ❌ Start over |
+  | Multi-agent | ✅ 8 parallel teams, tmux | ❌ Single agent |
+  | Security | ✅ Asimov Firewall, 44 hardening items | ❌ Basic sandboxing |
+  | Network-native | ✅ SSH, NETCONF, eAPI, telnet | ❌ Generic tools |
+  | Session memory | ✅ 3-tier Redis/disk/vector | ❌ Context window only |
+
+  </div>
+
+
 <h1 align="center">h-cli</h1>
 
 <p align="center">
