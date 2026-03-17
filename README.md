@@ -20,7 +20,6 @@
   | Fully offline | ✅ Data never leaves your network | ❌ Cloud-dependent |
   | Kill switch | ✅ Instant Pub/Sub abort | ❌ Close the tab |
   | Crash recovery | ✅ Automatic on restart | ❌ Start over |
-  | Multi-agent | ✅ 8 parallel teams, tmux | ❌ Single agent |
   | Security | ✅ Asimov Firewall, 44 hardening items | ❌ Basic sandboxing |
   | Network-native | ✅ SSH, NETCONF, eAPI, telnet | ❌ Generic tools |
   | Session memory | ✅ 3-tier Redis/disk/vector | ❌ Context window only |
