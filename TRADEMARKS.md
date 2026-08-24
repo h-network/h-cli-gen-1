@@ -36,7 +36,7 @@ The following uses are not permitted:
 
 ## Forks and modifications
 
-You are encouraged to fork this repository under the MIT license (see `LICENSE`). However, a fork that **substantially diverges** from the upstream project — for example, by removing the Asimov Firewall, introducing breaking changes to the safety architecture, or repurposing the codebase — must be **renamed** so it is not confused with the official project. Adding a vendor prefix (e.g. "acme-cli") is the standard pattern.
+See `LICENSE` (PolyForm Noncommercial 1.0.0) for what forking and modification rights apply to this project. A fork that **substantially diverges** from the upstream project — for example, by removing the Asimov Firewall, introducing breaking changes to the safety architecture, or repurposing the codebase — must be **renamed** so it is not confused with the official project. Adding a vendor prefix (e.g. "acme-cli") is the standard pattern.
 
 If you are unsure whether your intended use is allowed, please open a discussion in the project repository or contact the trademark owner directly.
 
@@ -50,8 +50,8 @@ GitHub: [@h-network](https://github.com/h-network)
 
 ## Why this policy exists
 
-An open license (MIT) ensures that anyone can implement, fork, and build on h-cli without legal friction. The trademark policy is the **counterweight** that keeps a single canonical identity for the project — so that when someone says "h-cli" or "Asimov Firewall", they mean *this* project, not a fragmented constellation of unrelated forks. This is the same pattern used by Linux, Rust, Kubernetes, Python, and most other successful open-source projects.
+A license grants clear terms for anyone to use, evaluate, and build on h-cli. The trademark policy is the **counterweight** that keeps a single canonical identity for the project — so that when someone says "h-cli" or "Asimov Firewall", they mean *this* project, not a fragmented constellation of unrelated forks. This is the same pattern used by Linux, Rust, Kubernetes, Python, and most other successful software projects.
 
 ---
 
-*This policy is itself released under the MIT License and may be reused as a template for other projects.*
+*This policy is itself released under the CC BY-NC 4.0 license and may be reused as a template for other H-Network projects.*
